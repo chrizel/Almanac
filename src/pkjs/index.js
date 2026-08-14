@@ -180,3 +180,11 @@ Pebble.addEventListener('appmessage', function (e) {
   console.log('AppMessage received');
   getWeather();
 });
+
+// Clay's own webviewclosed handler runs first and persists the new
+// settings, so this fetch picks up a changed temperature unit immediately.
+Pebble.addEventListener('webviewclosed', function (e) {
+  if (e && e.response) {
+    getWeather();
+  }
+});

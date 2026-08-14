@@ -27,7 +27,7 @@ Run `pebble clean` when adding or removing messageKeys in package.json — the b
 
 - Weather polling interval is defined as `WEATHER_POLL_MINUTES` in both `main.c` and `index.js` — keep them in sync
 - Persistent storage keys: `SETTINGS_KEY = 1` (accent color), `WEATHER_KEY = 2` (cached weather data)
-- Temperature unit is hardcoded to Fahrenheit in the Open-Meteo API call
+- Temperature unit is a Clay setting (`TempUnit`); the JS reads it from localStorage at fetch time and re-fetches on `webviewclosed` so unit changes apply immediately
 
 ## Marketing screenshots
 

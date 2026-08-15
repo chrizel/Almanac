@@ -3,6 +3,7 @@ var WEATHER_POLL_MINUTES = 30;
 var Clay = require('@rebble/clay');
 var clayConfig = require('./config');
 var clay = new Clay(clayConfig);
+var ics = require('./ics');
 
 var xhrRequest = function (url, type, callback) {
   var xhr = new XMLHttpRequest();
@@ -16,147 +17,98 @@ var xhrRequest = function (url, type, callback) {
   xhr.send();
 };
 
-var cachedCity = null;
-var lastLat = null;
-var lastLon = null;
-var LOCATION_THRESHOLD = 0.01; // ~1km movement before re-fetching city
+// Serialize outgoing AppMessages — weather and calendar sends can otherwise
+// race when both fetches resolve at the same time.
+var sendQueue = [];
+var sending = false;
 
-var CITY_ABBREVIATIONS = {
-  // Multi-word cities where initials are ambiguous or wrong
-  'coeur dalene': 'CDA',   // API returns "Coeur d'Alene"
-  'salt lake city': 'SLC', // API returns "Salt Lake City"
-  'oklahoma city': 'OKC',  // API returns "Oklahoma City"
-  'new orleans': 'NLA',    // API returns "New Orleans"
-  'fort worth': 'FTW',     // API returns "Fort Worth"
-  'fort collins': 'FTC',   // API returns "Fort Collins"
-  // St. cities where "SL", "SP" etc. are confusing
-  'st louis': 'STL',       // API returns "St. Louis" → normalizes to "st louis"
-  'saint louis': 'STL',
-  'saint paul': 'STP',     // API returns "Saint Paul"
-  'st paul': 'STP',
-  'st petersburg': 'SPB',  // API returns "St. Petersburg" → normalizes to "st petersburg"
-  'saint petersburg': 'SPB',
-  'st george': 'STG',
-  'saint george': 'STG',
-};
-
-function getCityInitials(name) {
-  var normalized = name.trim().toLowerCase().replace(/['.]/g, '');
-  var lookup = CITY_ABBREVIATIONS[normalized];
-  if (lookup) return lookup;
-  var words = name.trim().split(/\s+/);
-  if (words.length >= 2) {
-    return (words[0].charAt(0) + words[1].charAt(0)).toUpperCase();
-  }
-  return words[0].substring(0, 3).toUpperCase();
+function drainQueue() {
+  if (sending || !sendQueue.length) return;
+  sending = true;
+  var item = sendQueue.shift();
+  Pebble.sendAppMessage(item.msg,
+    function () {
+      console.log(item.label + ' sent successfully');
+      sending = false;
+      drainQueue();
+    },
+    function (e) {
+      console.log('Error sending ' + item.label + ': ' + JSON.stringify(e));
+      sending = false;
+      drainQueue();
+    });
 }
 
-function formatTo12h(isoString) {
-  var parts = isoString.split('T')[1].split(':');
-  var h = parseInt(parts[0], 10) % 12 || 12;
-  return h + ':' + parts[1];
+function enqueueSend(msg, label) {
+  sendQueue.push({ msg: msg, label: label });
+  drainQueue();
 }
 
-function locationMoved(lat, lon) {
-  return lastLat === null ||
-    Math.abs(lat - lastLat) > LOCATION_THRESHOLD ||
-    Math.abs(lon - lastLon) > LOCATION_THRESHOLD;
+function getClaySetting(key) {
+  try {
+    var settings = JSON.parse(localStorage.getItem('clay-settings'));
+    if (settings && settings[key] != null) return settings[key];
+  } catch (e) {}
+  return null;
 }
 
 function getTempUnit() {
-  try {
-    var settings = JSON.parse(localStorage.getItem('clay-settings'));
-    if (settings && settings.TempUnit) {
-      return parseInt(settings.TempUnit, 10) === 1 ? 'celsius' : 'fahrenheit';
-    }
-  } catch (e) {}
-  return 'fahrenheit';
+  var unit = getClaySetting('TempUnit');
+  return unit != null && parseInt(unit, 10) === 1 ? 'celsius' : 'fahrenheit';
+}
+
+// WMO weather code -> condition enum shared with main.c:
+// 0 clear · 1 partly · 2 overcast · 3 fog · 4 rain · 5 snow · 6 storm
+function conditionFromWmo(code) {
+  if (code === 0) return 0;
+  if (code === 1 || code === 2) return 1;
+  if (code === 3) return 2;
+  if (code === 45 || code === 48) return 3;
+  if (code >= 51 && code <= 67) return 4;   // drizzle + rain + freezing rain
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return 5;
+  if (code >= 80 && code <= 82) return 4;   // rain showers
+  if (code >= 95) return 6;
+  return 2;
+}
+
+// "2026-08-15T06:21" (local, timezone=auto) -> minutes since midnight
+function minutesFromIso(isoString) {
+  var parts = isoString.split('T')[1].split(':');
+  return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
 }
 
 function locationSuccess(pos) {
   var lat = pos.coords.latitude;
   var lon = pos.coords.longitude;
 
-  var unit = getTempUnit();
   var weatherUrl = 'https://api.open-meteo.com/v1/forecast?' +
     'latitude=' + lat + '&longitude=' + lon +
-    '&current=temperature_2m,uv_index' +
+    '&current=temperature_2m,weather_code' +
     '&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset' +
-    '&temperature_unit=' + unit +
+    '&temperature_unit=' + getTempUnit() +
     '&timezone=auto' +
     '&forecast_days=1';
-
-  var needGeo = locationMoved(lat, lon);
-  var weatherData = null;
-  var cityInitials = cachedCity || '';
-  var pending = needGeo ? 2 : 1;
-
-  function trySend() {
-    pending--;
-    if (pending > 0) return;
-    if (!weatherData) return;
-
-    var set, rise;
-    try {
-      set = formatTo12h(weatherData.daily.sunset[0]);
-      rise = formatTo12h(weatherData.daily.sunrise[0]);
-    } catch (e) {
-      console.log('Error parsing sun times: ' + e);
-      return;
-    }
-
-    lastLat = lat;
-    lastLon = lon;
-    cachedCity = cityInitials;
-
-    Pebble.sendAppMessage({
-      'TEMPERATURE': Math.round(weatherData.current.temperature_2m),
-      'TEMP_HIGH': Math.round(weatherData.daily.temperature_2m_max[0]),
-      'TEMP_LOW': Math.round(weatherData.daily.temperature_2m_min[0]),
-      'CITY': cityInitials,
-      'SUNSET': set,
-      'SUNRISE': rise,
-      'UV_INDEX': weatherData.current.uv_index != null ? Math.round(weatherData.current.uv_index) : -1
-    },
-      function (e) { console.log('Weather sent successfully'); },
-      function (e) { console.log('Error sending weather: ' + JSON.stringify(e)); }
-    );
-  }
 
   xhrRequest(weatherUrl, 'GET', function (weatherResp) {
     if (!weatherResp) {
       console.log('Weather request failed');
-      trySend();
       return;
     }
-    try { weatherData = JSON.parse(weatherResp); } catch (e) {
+    var w;
+    try {
+      w = JSON.parse(weatherResp);
+      enqueueSend({
+        'TEMPERATURE': Math.round(w.current.temperature_2m),
+        'TEMP_HIGH': Math.round(w.daily.temperature_2m_max[0]),
+        'TEMP_LOW': Math.round(w.daily.temperature_2m_min[0]),
+        'CONDITION': conditionFromWmo(w.current.weather_code),
+        'SUNRISE_MIN': minutesFromIso(w.daily.sunrise[0]),
+        'SUNSET_MIN': minutesFromIso(w.daily.sunset[0])
+      }, 'weather');
+    } catch (e) {
       console.log('Weather parse error: ' + e);
-      trySend();
-      return;
     }
-    trySend();
   });
-
-  if (needGeo) {
-    var geoUrl = 'https://api.bigdatacloud.net/data/reverse-geocode-client?' +
-      'latitude=' + lat + '&longitude=' + lon + '&localityLanguage=en';
-
-    xhrRequest(geoUrl, 'GET', function (geoResp) {
-      if (!geoResp) {
-        console.log('Geocode request failed, using blank city');
-        trySend();
-        return;
-      }
-      try { var geo = JSON.parse(geoResp); } catch (e) {
-        console.log('Geocode parse error: ' + e);
-        trySend();
-        return;
-      }
-      var city = geo.city || geo.locality || '';
-      cityInitials = city ? getCityInitials(city) : '';
-      trySend();
-    });
-  }
 }
 
 function locationError(err) {
@@ -171,20 +123,84 @@ function getWeather() {
   );
 }
 
+// ---- Calendar (ICS) ----
+
+function utf8ByteLength(s) {
+  var bytes = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff) { bytes += 4; i++; }  // surrogate pair
+    else bytes += 3;
+  }
+  return bytes;
+}
+
+// Truncate by characters AND UTF-8 bytes: the C-side buffers are 28 bytes,
+// and cutting mid-character would produce invalid UTF-8 the watch won't draw.
+function truncate(s, n, maxBytes) {
+  s = String(s || '');
+  if (s.length > n) s = s.slice(0, n);
+  while (utf8ByteLength(s) > maxBytes) s = s.slice(0, -1);
+  return s;
+}
+
+function sendEvent(ev) {
+  enqueueSend({
+    'EVENT_DAY': ev ? ev.day : -1,
+    'EVENT_START_MIN': ev ? ev.startMin : 0,
+    'EVENT_TITLE': ev ? truncate(ev.title, 24, 27) : '',
+    'EVENT_LOCATION': ev ? truncate(ev.location, 24, 27) : ''
+  }, 'event');
+}
+
+function getCalendar() {
+  var url = getClaySetting('IcsUrl');
+  url = url ? String(url).trim() : '';
+  if (!url) {
+    sendEvent(null);
+    return;
+  }
+  url = url.replace(/^webcal:\/\//i, 'https://');
+
+  xhrRequest(url, 'GET', function (resp) {
+    if (!resp) {
+      console.log('ICS request failed');
+      sendEvent(null);
+      return;
+    }
+    var ev = null;
+    try {
+      ev = ics.nextEvent(resp, new Date());
+    } catch (e) {
+      console.log('ICS parse error: ' + e);
+    }
+    sendEvent(ev);
+  });
+}
+
+// Weather and calendar fire from the same triggers but run independently —
+// a slow or failing ICS fetch never blocks the weather send.
+function refreshAll() {
+  getWeather();
+  getCalendar();
+}
+
 Pebble.addEventListener('ready', function (e) {
   console.log('PebbleKit JS ready');
-  getWeather();
+  refreshAll();
 });
 
 Pebble.addEventListener('appmessage', function (e) {
   console.log('AppMessage received');
-  getWeather();
+  refreshAll();
 });
 
 // Clay's own webviewclosed handler runs first and persists the new
-// settings, so this fetch picks up a changed temperature unit immediately.
+// settings, so this fetch picks up changed unit / ICS URL immediately.
 Pebble.addEventListener('webviewclosed', function (e) {
   if (e && e.response) {
-    getWeather();
+    refreshAll();
   }
 });

@@ -1,7 +1,7 @@
 {
   "name": "percival",
   "author": "Andrew Ford",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "license": "MIT",
   "keywords": [
     "pebble-app"
@@ -42,15 +42,18 @@
       "BottomCompRight": 12,
       "TempUnit": 13,
       "UV_INDEX": 14,
-      "Canvas": 15
+      "Canvas": 15,
+      "CONDITION": 16,
+      "SUNRISE_MIN": 17,
+      "SUNSET_MIN": 18,
+      "IcsUrl": 19,
+      "EVENT_DAY": 20,
+      "EVENT_START_MIN": 21,
+      "EVENT_TITLE": 22,
+      "EVENT_LOCATION": 23
     },
     "resources": {
       "media": [
-        {
-          "type": "png",
-          "name": "PEBBLE_LOGO",
-          "file": "images/pebble_logo.png"
-        },
         {
           "type": "png",
           "name": "MENU_ICON",
@@ -58,44 +61,40 @@
           "menuIcon": true
         },
         {
-          "type": "png",
-          "name": "SNEAKER_ICON",
-          "file": "images/sneaker.png"
-        },
-        {
           "type": "font",
           "name": "FONT_INTER_SEMIBOLD_14",
           "file": "fonts/Inter-SemiBold.ttf",
-          "characterRegex": "[ -~]",
-          "compatibility": "2.7"
+          "characterRegex": "[ -~·]"
         },
         {
           "type": "font",
           "name": "FONT_INTER_SEMIBOLD_16",
           "file": "fonts/Inter-SemiBold.ttf",
-          "characterRegex": "[ -~]",
-          "compatibility": "2.7"
+          "characterRegex": "[ -~·À-ÿ]"
         },
         {
           "type": "font",
           "name": "FONT_INTER_SEMIBOLD_18",
           "file": "fonts/Inter-SemiBold.ttf",
-          "characterRegex": "[0-9:\\-.kBTQ]",
-          "compatibility": "2.7"
+          "characterRegex": "[ -~°↑↓]"
         },
         {
           "type": "font",
-          "name": "FONT_INTER_SEMIBOLD_28",
-          "file": "fonts/Inter-SemiBold.ttf",
-          "characterRegex": "[ -~°]",
-          "compatibility": "2.7"
+          "name": "FONT_INTER_EXTRABOLD_20",
+          "file": "fonts/Inter-ExtraBold.ttf",
+          "characterRegex": "[ -~À-ÿ]"
         },
         {
           "type": "font",
-          "name": "FONT_INTER_SEMIBOLD_68",
-          "file": "fonts/Inter-SemiBold.ttf",
-          "characterRegex": "[0-9: ]",
-          "compatibility": "2.7"
+          "name": "FONT_INTER_EXTRABOLD_40",
+          "file": "fonts/Inter-ExtraBold.ttf",
+          "characterRegex": "[0-9°\\- ]"
+        },
+        {
+          "type": "font",
+          "name": "FONT_INTER_EXTRABOLD_68",
+          "file": "fonts/Inter-ExtraBold.ttf",
+          "characterRegex": "[0-9: ]"
         }
       ]
     }

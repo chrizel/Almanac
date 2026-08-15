@@ -1,78 +1,88 @@
 #include <pebble.h>
 
+// Uncomment to inject fake data for screenshots (see the
+// marketing-screenshots skill). Also disables AppMessage so the JS
+// companion cannot overwrite the stubs.
+// #define DEMO
+
+#ifdef DEMO
+#define DEMO_ACCENT GColorBlue
+#define DEMO_TIME_TEXT "14:28"
+#define DEMO_NOW_MIN 868          // 14:28
+#define DEMO_DOW "SAT"
+#define DEMO_DAY "15"
+#define DEMO_TODAY 20260815
+#define DEMO_TEMP 84
+#define DEMO_HIGH 91
+#define DEMO_LOW 67
+#define DEMO_CONDITION COND_CLEAR
+#define DEMO_SUNRISE_MIN 381      // 6:21
+#define DEMO_SUNSET_MIN 1234      // 20:34
+#define DEMO_EVENT_START_MIN 900  // 15:00
+#define DEMO_EVENT_DAY 0          // 0 today · 1 tomorrow · -1 none
+#define DEMO_EVENT_TITLE "Design Review"
+#define DEMO_EVENT_LOCATION "Office HQ, Room B2"
+#endif
+
 extern uint32_t MESSAGE_KEY_TEMPERATURE;
 extern uint32_t MESSAGE_KEY_TEMP_HIGH;
 extern uint32_t MESSAGE_KEY_TEMP_LOW;
-extern uint32_t MESSAGE_KEY_CITY;
 extern uint32_t MESSAGE_KEY_PrimaryColor;
-extern uint32_t MESSAGE_KEY_SUNSET;
-extern uint32_t MESSAGE_KEY_MiniCompLeft;
-extern uint32_t MESSAGE_KEY_MiniCompMiddle;
-extern uint32_t MESSAGE_KEY_MiniCompRight;
-extern uint32_t MESSAGE_KEY_SUNRISE;
-extern uint32_t MESSAGE_KEY_BottomCompLeft;
-extern uint32_t MESSAGE_KEY_BottomCompPrimary;
-extern uint32_t MESSAGE_KEY_BottomCompRight;
-extern uint32_t MESSAGE_KEY_UV_INDEX;
-extern uint32_t MESSAGE_KEY_Canvas;
+extern uint32_t MESSAGE_KEY_CONDITION;
+extern uint32_t MESSAGE_KEY_SUNRISE_MIN;
+extern uint32_t MESSAGE_KEY_SUNSET_MIN;
+extern uint32_t MESSAGE_KEY_EVENT_DAY;
+extern uint32_t MESSAGE_KEY_EVENT_START_MIN;
+extern uint32_t MESSAGE_KEY_EVENT_TITLE;
+extern uint32_t MESSAGE_KEY_EVENT_LOCATION;
 
-enum MiniCompType {
-  MINI_COMP_NONE = 0,
-  MINI_COMP_DATE = 1,
-  MINI_COMP_STEPS = 2,
-  MINI_COMP_BATTERY = 3,
-  MINI_COMP_YEAR = 4,
-  MINI_COMP_SUNSET = 5,
-  MINI_COMP_SUNRISE = 6,
-  MINI_COMP_MONTH = 7,
-  MINI_COMP_UV = 8,
-  MINI_COMP_WEEK = 9
+// Shared with conditionFromWmo() in src/pkjs/index.js
+enum Condition {
+  COND_CLEAR = 0,
+  COND_PARTLY = 1,
+  COND_OVERCAST = 2,
+  COND_FOG = 3,
+  COND_RAIN = 4,
+  COND_SNOW = 5,
+  COND_STORM = 6
 };
 
-enum Canvas {
-  CANVAS_PAPER = 0,
-  CANVAS_INK = 1
-};
-
-enum BottomCompType {
-  BOTTOM_COMP_NONE = 0,
-  BOTTOM_COMP_HIGHLOW = 1,
-  BOTTOM_COMP_WEATHER = 2,
-  BOTTOM_COMP_SUNSET = 3,
-  BOTTOM_COMP_SUNRISE = 4,
-  BOTTOM_COMP_STEPS = 5,
-  BOTTOM_COMP_WEEK = 6,
-  BOTTOM_COMP_UV = 7
-};
+#define WEATHER_POLL_MINUTES 30
+#define SETTINGS_KEY 1
+#define OLD_WEATHER_KEY 2  // v1.x string cache — deleted on first run
+#define WEATHER_KEY 3
+#define EVENT_KEY 4
 
 static Window *s_main_window;
-static TextLayer *s_time_layer;
-static Layer *s_brand_layer;
-static Layer *s_complications_layer;
-static Layer *s_top_bar_layer;
 static Layer *s_window_layer;
-
-static GBitmap *s_brand_bitmap;
-static GBitmap *s_sneaker_bitmap;
+static Layer *s_date_layer;
+static Layer *s_time_layer;
+static Layer *s_event_layer;
+static Layer *s_weather_layer;
 static Layer *s_bt_layer;
+static Layer *s_qt_layer;
 static bool s_bt_app_connected;
 static bool s_bt_radio_connected;
-static Layer *s_qt_layer;
 
 static GFont s_font_14;
 static GFont s_font_16;
 static GFont s_font_18;
-static GFont s_font_28;
+static GFont s_font_20;
+static GFont s_font_40;
 static GFont s_font_68;
 
-#define TOP_BAR_HEIGHT 22
-#define WEATHER_POLL_MINUTES 30
-#define SETTINGS_KEY 1
-#define WEATHER_KEY 2
+static GPath *s_bolt_path;
+
+static const GPathInfo BOLT_INFO = {
+  .num_points = 7,
+  .points = (GPoint[]) {{1, -3}, {-6, 8}, {-1, 8}, {-4, 18}, {8, 6}, {3, 6}, {7, -3}}
+};
 
 // New fields must be appended to the end — never insert or reorder.
 // load_settings() reads stored bytes and zero-fills the rest, so
 // existing users keep their settings when the struct grows.
+// The v1.x complication/canvas fields are kept (ignored) so stored
+// bytes still map correctly; primary_color is now the event accent.
 typedef struct {
   GColor primary_color;
   uint8_t mini_comp_left;
@@ -86,61 +96,23 @@ typedef struct {
 
 static Settings s_settings;
 
-static GColor fg_color() {
-  return s_settings.canvas == CANVAS_INK ? GColorWhite : s_settings.primary_color;
-}
-
-static GColor bg_color() {
-  return s_settings.canvas == CANVAS_INK ? s_settings.primary_color : GColorWhite;
-}
-
-static bool has_mini_comp(uint8_t type) {
-  return (s_settings.mini_comp_left == type ||
-          s_settings.mini_comp_middle == type ||
-          s_settings.mini_comp_right == type);
-}
-
-static bool has_bottom_comp(uint8_t type) {
-  return (s_settings.bottom_comp_left == type ||
-          s_settings.bottom_comp_primary == type ||
-          s_settings.bottom_comp_right == type);
-}
-
-static bool needs_weather() {
-  return (has_mini_comp(MINI_COMP_SUNSET) ||
-          has_mini_comp(MINI_COMP_SUNRISE) ||
-          has_mini_comp(MINI_COMP_UV) ||
-          has_bottom_comp(BOTTOM_COMP_HIGHLOW) ||
-          has_bottom_comp(BOTTOM_COMP_WEATHER) ||
-          has_bottom_comp(BOTTOM_COMP_SUNSET) ||
-          has_bottom_comp(BOTTOM_COMP_SUNRISE) ||
-          has_bottom_comp(BOTTOM_COMP_UV));
-}
-
-static bool needs_steps() {
-  return (has_mini_comp(MINI_COMP_STEPS) ||
-          has_bottom_comp(BOTTOM_COMP_STEPS));
-}
-
 static void default_settings() {
-  s_settings.primary_color = GColorBlack;
-  s_settings.mini_comp_left = MINI_COMP_DATE;
-  s_settings.mini_comp_middle = MINI_COMP_STEPS;
-  s_settings.mini_comp_right = MINI_COMP_BATTERY;
-  s_settings.bottom_comp_left = BOTTOM_COMP_HIGHLOW;
-  s_settings.bottom_comp_primary = BOTTOM_COMP_WEATHER;
-  s_settings.bottom_comp_right = BOTTOM_COMP_SUNSET;
-  s_settings.canvas = CANVAS_PAPER;
+  memset(&s_settings, 0, sizeof(s_settings));
+  s_settings.primary_color = GColorBlue;
 }
 
 static void load_settings() {
   default_settings();
+#ifdef DEMO
+  s_settings.primary_color = DEMO_ACCENT;
+#else
   if (persist_exists(SETTINGS_KEY)) {
     int stored = persist_get_size(SETTINGS_KEY);
     if (stored > 0 && (size_t)stored <= sizeof(s_settings)) {
       persist_read_data(SETTINGS_KEY, &s_settings, stored);
     }
   }
+#endif
 }
 
 static void save_settings() {
@@ -148,183 +120,75 @@ static void save_settings() {
 }
 
 typedef struct {
-  char temp[8];
-  char high[8];
-  char low[8];
-  char city[4];
-  char sunset[8];
-  char sunrise[8];
-  char uv[12];
+  int16_t temp;
+  int16_t high;
+  int16_t low;
+  int16_t condition;
+  int16_t sunrise_min;
+  int16_t sunset_min;
   bool loaded;
 } WeatherCache;
 
 static WeatherCache s_weather;
 
+typedef struct {
+  int32_t civil_date;  // YYYYMMDD of the event's day; 0 = no event
+  int16_t start_min;   // minutes since midnight
+  char title[28];
+  char location[28];
+} EventCache;
+
+static EventCache s_event;
+
 static void load_weather() {
   memset(&s_weather, 0, sizeof(s_weather));
+#ifdef DEMO
+  s_weather.temp = DEMO_TEMP;
+  s_weather.high = DEMO_HIGH;
+  s_weather.low = DEMO_LOW;
+  s_weather.condition = DEMO_CONDITION;
+  s_weather.sunrise_min = DEMO_SUNRISE_MIN;
+  s_weather.sunset_min = DEMO_SUNSET_MIN;
+  s_weather.loaded = true;
+#else
   if (persist_exists(WEATHER_KEY)) {
     int stored = persist_get_size(WEATHER_KEY);
     if (stored > 0 && (size_t)stored <= sizeof(s_weather)) {
       persist_read_data(WEATHER_KEY, &s_weather, stored);
     }
   }
+#endif
 }
 
 static void save_weather() {
   persist_write_data(WEATHER_KEY, &s_weather, sizeof(s_weather));
 }
 
-static int s_battery_level;
-static char s_date_buffer[12];
-static char s_battery_buffer[8];
-static char s_steps_buffer[12];
-static char s_year_buffer[12];
-static char s_month_buffer[5];
-static char s_sunset_mini_buffer[12];
-static char s_sunrise_mini_buffer[12];
-static char s_uv_buffer[16];
-static char s_week_buffer[8];
-
-static void update_status_buffer(struct tm *t);
-static void update_display();
-
-static void format_time_buffer(const char *src, char *dest, size_t size, const char *suffix) {
-  if (s_weather.loaded && src[0]) {
-    snprintf(dest, size, "%s%s", src, suffix);
-  } else {
-    snprintf(dest, size, "--");
-  }
-}
-
-static void update_mini_weather_buffers() {
-  format_time_buffer(s_weather.sunset, s_sunset_mini_buffer, sizeof(s_sunset_mini_buffer), "p");
-  format_time_buffer(s_weather.sunrise, s_sunrise_mini_buffer, sizeof(s_sunrise_mini_buffer), "a");
-  if (s_weather.loaded && s_weather.uv[0]) {
-    snprintf(s_uv_buffer, sizeof(s_uv_buffer), "UV %s", s_weather.uv);
-  } else {
-    snprintf(s_uv_buffer, sizeof(s_uv_buffer), "UV -");
-  }
-}
-
-static uint8_t tuple_to_uint8(Tuple *t) {
-  return t->type == TUPLE_CSTRING ? (uint8_t)atoi(t->value->cstring) : (uint8_t)t->value->int32;
-}
-
-
-static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
-  // Weather data
-  Tuple *temp_tuple = dict_find(iterator, MESSAGE_KEY_TEMPERATURE);
-  Tuple *high_tuple = dict_find(iterator, MESSAGE_KEY_TEMP_HIGH);
-  Tuple *low_tuple = dict_find(iterator, MESSAGE_KEY_TEMP_LOW);
-
-  if (temp_tuple) {
-    snprintf(s_weather.temp, sizeof(s_weather.temp), "%d", (int)temp_tuple->value->int32);
-  }
-  if (high_tuple) {
-    snprintf(s_weather.high, sizeof(s_weather.high), "%d", (int)high_tuple->value->int32);
-  }
-  if (low_tuple) {
-    snprintf(s_weather.low, sizeof(s_weather.low), "%d", (int)low_tuple->value->int32);
-  }
-
-  Tuple *city_tuple = dict_find(iterator, MESSAGE_KEY_CITY);
-  if (city_tuple) {
-    snprintf(s_weather.city, sizeof(s_weather.city), "%s", city_tuple->value->cstring);
-  }
-
-  Tuple *sunset_tuple = dict_find(iterator, MESSAGE_KEY_SUNSET);
-  if (sunset_tuple) {
-    snprintf(s_weather.sunset, sizeof(s_weather.sunset), "%s", sunset_tuple->value->cstring);
-  }
-
-  Tuple *sunrise_tuple = dict_find(iterator, MESSAGE_KEY_SUNRISE);
-  if (sunrise_tuple) {
-    snprintf(s_weather.sunrise, sizeof(s_weather.sunrise), "%s", sunrise_tuple->value->cstring);
-  }
-
-  Tuple *uv_tuple = dict_find(iterator, MESSAGE_KEY_UV_INDEX);
-  if (uv_tuple) {
-    int uv_val = (int)uv_tuple->value->int32;
-    if (uv_val >= 0) {
-      snprintf(s_weather.uv, sizeof(s_weather.uv), "%d", uv_val);
-    } else {
-      s_weather.uv[0] = '\0';
+static void load_event() {
+  memset(&s_event, 0, sizeof(s_event));
+#ifdef DEMO
+  #if DEMO_EVENT_DAY >= 0
+  s_event.civil_date = DEMO_TODAY + DEMO_EVENT_DAY;
+  s_event.start_min = DEMO_EVENT_START_MIN;
+  snprintf(s_event.title, sizeof(s_event.title), DEMO_EVENT_TITLE);
+  snprintf(s_event.location, sizeof(s_event.location), DEMO_EVENT_LOCATION);
+  #endif
+#else
+  if (persist_exists(EVENT_KEY)) {
+    int stored = persist_get_size(EVENT_KEY);
+    if (stored > 0 && (size_t)stored <= sizeof(s_event)) {
+      persist_read_data(EVENT_KEY, &s_event, stored);
     }
   }
-
-  if (temp_tuple || high_tuple || low_tuple || city_tuple || sunset_tuple || sunrise_tuple || uv_tuple) {
-    s_weather.loaded = true;
-    save_weather();
-    update_mini_weather_buffers();
-    if (s_complications_layer) {
-      layer_mark_dirty(s_complications_layer);
-    }
-    if (s_top_bar_layer) {
-      layer_mark_dirty(s_top_bar_layer);
-    }
-  }
-
-  // Settings
-  Tuple *color_t = dict_find(iterator, MESSAGE_KEY_PrimaryColor);
-  Tuple *left_t = dict_find(iterator, MESSAGE_KEY_MiniCompLeft);
-  Tuple *mid_t = dict_find(iterator, MESSAGE_KEY_MiniCompMiddle);
-  Tuple *right_t = dict_find(iterator, MESSAGE_KEY_MiniCompRight);
-  Tuple *bleft_t = dict_find(iterator, MESSAGE_KEY_BottomCompLeft);
-  Tuple *bpri_t = dict_find(iterator, MESSAGE_KEY_BottomCompPrimary);
-  Tuple *bright_t = dict_find(iterator, MESSAGE_KEY_BottomCompRight);
-  Tuple *canvas_t = dict_find(iterator, MESSAGE_KEY_Canvas);
-
-  bool settings_changed = false;
-  if (color_t) {
-    s_settings.primary_color = GColorFromHEX(color_t->value->int32);
-    settings_changed = true;
-  }
-  if (left_t) {
-    s_settings.mini_comp_left = tuple_to_uint8(left_t);
-    settings_changed = true;
-  }
-  if (mid_t) {
-    s_settings.mini_comp_middle = tuple_to_uint8(mid_t);
-    settings_changed = true;
-  }
-  if (right_t) {
-    s_settings.mini_comp_right = tuple_to_uint8(right_t);
-    settings_changed = true;
-  }
-  if (bleft_t) {
-    s_settings.bottom_comp_left = tuple_to_uint8(bleft_t);
-    settings_changed = true;
-  }
-  if (bpri_t) {
-    s_settings.bottom_comp_primary = tuple_to_uint8(bpri_t);
-    settings_changed = true;
-  }
-  if (bright_t) {
-    s_settings.bottom_comp_right = tuple_to_uint8(bright_t);
-    settings_changed = true;
-  }
-  if (canvas_t) {
-    s_settings.canvas = tuple_to_uint8(canvas_t);
-    settings_changed = true;
-  }
-  if (settings_changed) {
-    save_settings();
-    window_set_background_color(s_main_window, bg_color());
-    update_display();
-  }
+#endif
 }
 
-static void inbox_dropped_callback(AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped!");
+static void save_event() {
+  persist_write_data(EVENT_KEY, &s_event, sizeof(s_event));
 }
 
-static void outbox_failed_callback(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_ERROR, "Outbox send failed!");
-}
-
-static void outbox_sent_callback(DictionaryIterator *iterator, void *context) {
-  APP_LOG(APP_LOG_LEVEL_INFO, "Outbox send success!");
-}
+static char s_dow_buffer[6];
+static char s_day_buffer[4];
 
 static struct tm *get_time(struct tm *t) {
   if (t) return t;
@@ -332,66 +196,314 @@ static struct tm *get_time(struct tm *t) {
   return localtime(&now);
 }
 
+static int now_minutes() {
+#ifdef DEMO
+  return DEMO_NOW_MIN;
+#else
+  struct tm *t = get_time(NULL);
+  return t->tm_hour * 60 + t->tm_min;
+#endif
+}
+
+static int32_t yyyymmdd(struct tm *t) {
+  return (t->tm_year + 1900) * 10000 + (t->tm_mon + 1) * 100 + t->tm_mday;
+}
+
+static int32_t today_civil_date() {
+#ifdef DEMO
+  return DEMO_TODAY;
+#else
+  return yyyymmdd(get_time(NULL));
+#endif
+}
+
+static int32_t tomorrow_civil_date() {
+#ifdef DEMO
+  return DEMO_TODAY + 1;
+#else
+  time_t n = time(NULL) + 86400;
+  return yyyymmdd(localtime(&n));
+#endif
+}
+
+// "6:21" / "20:34" (24h) or "6:21" / "8:34" (12h, no am/pm marker)
+static void format_clock_min(int minutes, char *buf, size_t size) {
+  int h = minutes / 60;
+  int m = minutes % 60;
+  if (!clock_is_24h_style()) {
+    h = h % 12;
+    if (h == 0) h = 12;
+  }
+  snprintf(buf, size, "%d:%02d", h, m);
+}
+
+// ---- Time ----
+
+static char s_time_buffer[8];
+
 static void update_time(struct tm *tick_time) {
+#ifdef DEMO
+  snprintf(s_time_buffer, sizeof(s_time_buffer), DEMO_TIME_TEXT);
+#else
   struct tm *t = get_time(tick_time);
-
-  static char s_time_buffer[8];
-  strftime(s_time_buffer, sizeof(s_time_buffer), clock_is_24h_style() ?
-                                                    "%H:%M" : "%I:%M", t);
-  char *display = s_time_buffer;
+  char raw[8];
+  strftime(raw, sizeof(raw), clock_is_24h_style() ? "%H:%M" : "%I:%M", t);
+  char *display = raw;
   if (display[0] == '0') display++;
-  text_layer_set_text(s_time_layer, display);
-}
-
-static void update_quiet_time();
-
-static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-  update_time(tick_time);
-  update_status_buffer(tick_time);
-  update_quiet_time();
-
-  // Request weather update every 30 minutes (only if needed and phone is connected)
-  if (tick_time->tm_min % WEATHER_POLL_MINUTES == 0 &&
-      needs_weather() &&
-      connection_service_peek_pebble_app_connection()) {
-    DictionaryIterator *iter;
-    if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
-      dict_write_uint8(iter, 0, 0);
-      app_message_outbox_send();
-    }
+  snprintf(s_time_buffer, sizeof(s_time_buffer), "%s", display);
+#endif
+  if (s_time_layer) {
+    layer_mark_dirty(s_time_layer);
   }
 }
 
-static void update_status_buffer(struct tm *tick_time) {
+// Drawn glyph by glyph with negative tracking — wide 24h times ("20:34")
+// don't fit at this size with the font's natural spacing, and Pebble has
+// no letter-spacing equivalent.
+#define TIME_TRACKING -5
+
+static void time_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  int n = strlen(s_time_buffer);
+  if (n == 0 || n > 7) return;
+
+  GRect probe = GRect(0, 0, b.size.w, b.size.h);
+  char glyph[2] = {0, 0};
+  int widths[8];
+  int total = TIME_TRACKING * (n - 1);
+  for (int i = 0; i < n; i++) {
+    glyph[0] = s_time_buffer[i];
+    widths[i] = graphics_text_layout_get_content_size(
+        glyph, s_font_68, probe, GTextOverflowModeWordWrap, GTextAlignmentLeft).w;
+    total += widths[i];
+  }
+
+  int x = b.size.w - 10 - total;
+  graphics_context_set_text_color(ctx, GColorBlack);
+  for (int i = 0; i < n; i++) {
+    glyph[0] = s_time_buffer[i];
+    graphics_draw_text(ctx, glyph, s_font_68, GRect(x, 0, widths[i] + 4, b.size.h),
+                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+    x += widths[i] + TIME_TRACKING;
+  }
+}
+
+// ---- Date label ("SAT 15", top right above the time) ----
+
+static void update_date_label(struct tm *tick_time) {
   struct tm *t = get_time(tick_time);
-  static const char *days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-  const char *day = days[t->tm_wday];
-  static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "June",
-                                   "July", "Aug", "Sep", "Oct", "Nov", "Dec"};
-  snprintf(s_year_buffer, sizeof(s_year_buffer), "%d", t->tm_year + 1900);
-  snprintf(s_month_buffer, sizeof(s_month_buffer), "%s", months[t->tm_mon]);
-  strftime(s_week_buffer, sizeof(s_week_buffer), "W%V", t);
-  snprintf(s_date_buffer, sizeof(s_date_buffer), "%s %d", day, t->tm_mday);
-  snprintf(s_battery_buffer, sizeof(s_battery_buffer), "%d%%", s_battery_level);
+  static const char *days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+  snprintf(s_dow_buffer, sizeof(s_dow_buffer), "%s", days[t->tm_wday]);
+  snprintf(s_day_buffer, sizeof(s_day_buffer), "%d", t->tm_mday);
+#ifdef DEMO
+  snprintf(s_dow_buffer, sizeof(s_dow_buffer), DEMO_DOW);
+  snprintf(s_day_buffer, sizeof(s_day_buffer), DEMO_DAY);
+#endif
+  if (s_date_layer) {
+    layer_mark_dirty(s_date_layer);
+  }
+}
 
-  if (needs_steps()) {
-    int steps = (int)health_service_sum_today(HealthMetricStepCount);
-    if (steps >= 1000) {
-      snprintf(s_steps_buffer, sizeof(s_steps_buffer), "%dk", steps / 1000);
+static void date_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  GRect probe = GRect(0, 0, b.size.w, 24);
+  GSize day_size = graphics_text_layout_get_content_size(
+      s_day_buffer, s_font_20, probe,
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+  GSize dow_size = graphics_text_layout_get_content_size(
+      s_dow_buffer, s_font_20, probe,
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+  int day_x = b.size.w - 10 - day_size.w;
+  int dow_x = day_x - 5 - dow_size.w;
+
+  graphics_context_set_text_color(ctx, s_settings.primary_color);
+  graphics_draw_text(ctx, s_dow_buffer, s_font_20, GRect(dow_x, 0, dow_size.w + 2, 24),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, s_day_buffer, s_font_20, GRect(day_x, 0, day_size.w + 2, 24),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+// ---- Event block ----
+
+static void event_update_proc(Layer *layer, GContext *ctx) {
+  if (s_event.civil_date == 0) return;
+
+  int day;
+  if (s_event.civil_date == today_civil_date()) {
+    day = 0;
+  } else if (s_event.civil_date == tomorrow_civil_date()) {
+    day = 1;
+  } else {
+    return;  // stale cache (e.g. after midnight rollover past the event)
+  }
+
+  char timebuf[8];
+  format_clock_min(s_event.start_min, timebuf, sizeof(timebuf));
+
+  char when[40];
+  if (day == 0) {
+    int d = s_event.start_min - now_minutes();
+    if (d < -5) return;  // passed; hidden until the next JS refresh replaces it
+    if (d <= 0) {
+      snprintf(when, sizeof(when), "%s \xC2\xB7 NOW", timebuf);
+    } else if (d < 60) {
+      snprintf(when, sizeof(when), "%s \xC2\xB7 IN %d MIN", timebuf, d);
+    } else if (d % 60 == 0) {
+      snprintf(when, sizeof(when), "%s \xC2\xB7 IN %d H", timebuf, d / 60);
     } else {
-      snprintf(s_steps_buffer, sizeof(s_steps_buffer), "%d", steps);
+      snprintf(when, sizeof(when), "%s \xC2\xB7 IN %d H %d MIN", timebuf, d / 60, d % 60);
     }
+  } else {
+    snprintf(when, sizeof(when), "TOMORROW \xC2\xB7 %s", timebuf);
   }
 
-  if (s_top_bar_layer) {
-    layer_mark_dirty(s_top_bar_layer);
+  GRect b = layer_get_bounds(layer);
+  const int when_h = 17;
+  const int title_h = 22;
+  const int loc_h = s_event.location[0] ? 17 : 0;
+  const int tx = 23;
+  const int tw = b.size.w - tx - 6;
+
+  // Accent bar spanning the text block
+  graphics_context_set_fill_color(ctx, s_settings.primary_color);
+  graphics_fill_rect(ctx, GRect(10, 3, 5, when_h + title_h + loc_h - 1), 0, GCornerNone);
+
+  graphics_context_set_text_color(ctx, s_settings.primary_color);
+  graphics_draw_text(ctx, when, s_font_16, GRect(tx, 0, tw, 18),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, s_event.title, s_font_20, GRect(tx, when_h, tw, 24),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  if (loc_h) {
+    graphics_draw_text(ctx, s_event.location, s_font_16, GRect(tx, when_h + title_h, tw, 18),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
 }
 
-static void battery_callback(BatteryChargeState state) {
-  s_battery_level = state.charge_percent;
-  update_status_buffer(NULL);
+// ---- Weather (big icon · current temp · stacked hi/lo) ----
+
+static void draw_cloud(GContext *ctx, int cx, int cy) {
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_circle(ctx, GPoint(cx - 6, cy + 1), 7);
+  graphics_fill_circle(ctx, GPoint(cx + 3, cy - 3), 9);
+  graphics_fill_rect(ctx, GRect(cx - 13, cy + 1, 27, 9), 4, GCornersAll);
 }
+
+static void draw_sun_rays(GContext *ctx, int cx, int cy, int r1, int r2) {
+  static const int dirs[8][2] = {
+    {10, 0}, {7, 7}, {0, 10}, {-7, 7}, {-10, 0}, {-7, -7}, {0, -10}, {7, -7}
+  };
+  for (int i = 0; i < 8; i++) {
+    graphics_draw_line(ctx,
+        GPoint(cx + dirs[i][0] * r1 / 10, cy + dirs[i][1] * r1 / 10),
+        GPoint(cx + dirs[i][0] * r2 / 10, cy + dirs[i][1] * r2 / 10));
+  }
+}
+
+static void draw_condition_icon(GContext *ctx, int cx, int cy, int cond, bool night) {
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_context_set_stroke_width(ctx, 2);
+
+  switch (cond) {
+    case COND_CLEAR:
+      if (night) {
+        // Crescent: filled disc with a background-colored punch-out
+        graphics_fill_circle(ctx, GPoint(cx, cy), 11);
+        graphics_context_set_fill_color(ctx, GColorWhite);
+        graphics_fill_circle(ctx, GPoint(cx + 7, cy - 7), 10);
+      } else {
+        graphics_fill_circle(ctx, GPoint(cx, cy), 6);
+        draw_sun_rays(ctx, cx, cy, 10, 16);
+      }
+      break;
+    case COND_PARTLY:
+      // Small sun peeking out top-right, clearly separated from the cloud
+      graphics_fill_circle(ctx, GPoint(cx + 8, cy - 11), 4);
+      graphics_draw_line(ctx, GPoint(cx + 8, cy - 19), GPoint(cx + 8, cy - 17));
+      graphics_draw_line(ctx, GPoint(cx + 14, cy - 17), GPoint(cx + 15, cy - 18));
+      graphics_draw_line(ctx, GPoint(cx + 15, cy - 11), GPoint(cx + 16, cy - 11));
+      draw_cloud(ctx, cx - 3, cy + 5);
+      break;
+    case COND_OVERCAST:
+      draw_cloud(ctx, cx, cy);
+      break;
+    case COND_FOG:
+      draw_cloud(ctx, cx, cy - 5);
+      graphics_draw_line(ctx, GPoint(cx - 12, cy + 8), GPoint(cx + 12, cy + 8));
+      graphics_draw_line(ctx, GPoint(cx - 9, cy + 13), GPoint(cx + 9, cy + 13));
+      break;
+    case COND_RAIN:
+      draw_cloud(ctx, cx, cy - 4);
+      for (int i = -1; i <= 1; i++) {
+        graphics_draw_line(ctx, GPoint(cx + i * 7, cy + 8), GPoint(cx + i * 7 - 3, cy + 15));
+      }
+      break;
+    case COND_SNOW:
+      draw_cloud(ctx, cx, cy - 4);
+      graphics_fill_circle(ctx, GPoint(cx - 7, cy + 11), 2);
+      graphics_fill_circle(ctx, GPoint(cx, cy + 15), 2);
+      graphics_fill_circle(ctx, GPoint(cx + 7, cy + 11), 2);
+      break;
+    case COND_STORM:
+      draw_cloud(ctx, cx, cy - 6);
+      gpath_move_to(s_bolt_path, GPoint(cx, cy));
+      gpath_draw_filled(ctx, s_bolt_path);
+      break;
+  }
+}
+
+static void weather_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  const int center_y = b.size.h / 2;
+
+  bool loaded = s_weather.loaded;
+  int now_min = now_minutes();
+  bool night = loaded && (now_min < s_weather.sunrise_min || now_min > s_weather.sunset_min);
+
+  // \xE2\x86\x91 = ↑, \xE2\x86\x93 = ↓, \xC2\xB0 = °
+  char cur[8], hi[12], lo[12];
+  if (loaded) {
+    snprintf(cur, sizeof(cur), "%d\xC2\xB0", s_weather.temp);
+    snprintf(hi, sizeof(hi), "\xE2\x86\x91 %d\xC2\xB0", s_weather.high);
+    snprintf(lo, sizeof(lo), "\xE2\x86\x93 %d\xC2\xB0", s_weather.low);
+  } else {
+    snprintf(cur, sizeof(cur), "--");
+    snprintf(hi, sizeof(hi), "\xE2\x86\x91 --");
+    snprintf(lo, sizeof(lo), "\xE2\x86\x93 --");
+  }
+
+  GRect probe = GRect(0, 0, b.size.w, 50);
+  GSize cur_size = graphics_text_layout_get_content_size(
+      cur, s_font_40, probe, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+  GSize hi_size = graphics_text_layout_get_content_size(
+      hi, s_font_18, probe, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+  GSize lo_size = graphics_text_layout_get_content_size(
+      lo, s_font_18, probe, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+  int hilo_w = hi_size.w > lo_size.w ? hi_size.w : lo_size.w;
+
+  const int icon_w = 36;
+  const int gap = 9;
+  int total = icon_w + gap + cur_size.w + gap + hilo_w;
+  int x = (b.size.w - total) / 2;
+
+  if (loaded) {
+    draw_condition_icon(ctx, x + icon_w / 2, center_y, s_weather.condition, night);
+  }
+
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, cur, s_font_40,
+                     GRect(x + icon_w + gap, center_y - 26, cur_size.w + 2, 50),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  int hx = x + icon_w + gap + cur_size.w + gap;
+  graphics_draw_text(ctx, hi, s_font_18, GRect(hx, center_y - 22, hilo_w + 2, 22),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_draw_text(ctx, lo, s_font_18, GRect(hx, center_y - 1, hilo_w + 2, 22),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+// ---- BT / QT indicators ----
 
 static void update_bt_visibility() {
   if (s_bt_layer) {
@@ -412,14 +524,14 @@ static void bt_radio_callback(bool connected) {
 static void bt_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   graphics_context_set_text_color(ctx, GColorRed);
-  graphics_draw_text(ctx, "BT", s_font_18, bounds,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+  graphics_draw_text(ctx, "BT", s_font_14, bounds,
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
 static void qt_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  graphics_context_set_text_color(ctx, fg_color());
-  graphics_draw_text(ctx, "QT", s_font_18, bounds,
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, "QT", s_font_14, bounds,
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
@@ -429,319 +541,108 @@ static void update_quiet_time() {
   }
 }
 
-static void update_display() {
-  if (s_time_layer) {
-    text_layer_set_text_color(s_time_layer, fg_color());
-  }
-  if (s_brand_layer) {
-    layer_mark_dirty(s_brand_layer);
-  }
-  if (s_top_bar_layer) {
-    layer_mark_dirty(s_top_bar_layer);
-  }
-  if (s_complications_layer) {
-    layer_mark_dirty(s_complications_layer);
-  }
-  if (s_qt_layer) {
-    layer_mark_dirty(s_qt_layer);
-  }
-}
+// ---- Messaging ----
 
-static void brand_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  GSize bmp_size = gbitmap_get_bounds(s_brand_bitmap).size;
-  int x = (bounds.size.w - bmp_size.w) / 2;
-  int y = (bounds.size.h - bmp_size.h) / 2;
+static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
+  // Weather
+  Tuple *temp_t = dict_find(iterator, MESSAGE_KEY_TEMPERATURE);
+  Tuple *high_t = dict_find(iterator, MESSAGE_KEY_TEMP_HIGH);
+  Tuple *low_t = dict_find(iterator, MESSAGE_KEY_TEMP_LOW);
+  Tuple *cond_t = dict_find(iterator, MESSAGE_KEY_CONDITION);
+  Tuple *rise_t = dict_find(iterator, MESSAGE_KEY_SUNRISE_MIN);
+  Tuple *set_t = dict_find(iterator, MESSAGE_KEY_SUNSET_MIN);
 
-  #ifdef PBL_COLOR
-    static GColor palette[2];
-    palette[0] = fg_color();
-    palette[1] = GColorClear;
-    gbitmap_set_palette(s_brand_bitmap, palette, false);
-  #endif
-  graphics_context_set_compositing_mode(ctx, GCompOpSet);
-  graphics_draw_bitmap_in_rect(ctx, s_brand_bitmap, GRect(x, y, bmp_size.w, bmp_size.h));
-}
-
-static const char* get_mini_comp_text(uint8_t type) {
-  switch (type) {
-    case MINI_COMP_DATE: return s_date_buffer;
-    case MINI_COMP_STEPS: return s_steps_buffer;
-    case MINI_COMP_BATTERY: return s_battery_buffer;
-    case MINI_COMP_YEAR: return s_year_buffer;
-    case MINI_COMP_SUNSET: return s_sunset_mini_buffer;
-    case MINI_COMP_SUNRISE: return s_sunrise_mini_buffer;
-    case MINI_COMP_MONTH: return s_month_buffer;
-    case MINI_COMP_UV: return s_uv_buffer;
-    case MINI_COMP_WEEK: return s_week_buffer;
-    default: return NULL;
-  }
-}
-
-static void top_bar_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  bool ink = s_settings.canvas == CANVAS_INK;
-
-  if (!ink) {
-    graphics_context_set_fill_color(ctx, s_settings.primary_color);
-    graphics_fill_rect(ctx, bounds, 0, GCornerNone);
-  }
-
-  const char *items_in[3] = {
-    get_mini_comp_text(s_settings.mini_comp_left),
-    get_mini_comp_text(s_settings.mini_comp_middle),
-    get_mini_comp_text(s_settings.mini_comp_right),
-  };
-
-  graphics_context_set_text_color(ctx, GColorWhite);
-  int pad = 4;
-  int dot_r = 2;
-  int dot_d = 2 * dot_r;
-  int dot_y = bounds.size.h / 2;
-  GRect probe_rect = GRect(0, 0, bounds.size.w, bounds.size.h);
-
-  const char *active[3];
-  GSize sizes[3];
-  int n = 0;
-  int total_text_w = 0;
-  for (int i = 0; i < 3; i++) {
-    if (items_in[i]) {
-      active[n] = items_in[i];
-      sizes[n] = graphics_text_layout_get_content_size(
-          items_in[i], s_font_16, probe_rect,
-          GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
-      total_text_w += sizes[n].w;
-      n++;
+  if (temp_t && high_t && low_t) {
+    s_weather.temp = (int16_t)temp_t->value->int32;
+    s_weather.high = (int16_t)high_t->value->int32;
+    s_weather.low = (int16_t)low_t->value->int32;
+    if (cond_t) s_weather.condition = (int16_t)cond_t->value->int32;
+    if (rise_t) s_weather.sunrise_min = (int16_t)rise_t->value->int32;
+    if (set_t) s_weather.sunset_min = (int16_t)set_t->value->int32;
+    s_weather.loaded = true;
+    save_weather();
+    if (s_weather_layer) {
+      layer_mark_dirty(s_weather_layer);
     }
   }
 
-  if (n > 0) {
-    int avail = bounds.size.w - 2 * pad - total_text_w - (n - 1) * dot_d;
-    int gap = (n > 1) ? avail / (2 * (n - 1)) : 0;
-    int x = pad + (n == 1 ? avail / 2 : 0);
-
-    graphics_context_set_fill_color(ctx, GColorWhite);
-    for (int i = 0; i < n; i++) {
-      GRect r = GRect(x, 2, sizes[i].w, bounds.size.h);
-      graphics_draw_text(ctx, active[i], s_font_16, r,
-                         GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-      x += sizes[i].w;
-      if (i < n - 1) {
-        x += gap;
-        graphics_fill_circle(ctx, GPoint(x + dot_r, dot_y), dot_r);
-        x += dot_d + gap;
-      }
+  // Calendar event
+  Tuple *ev_day_t = dict_find(iterator, MESSAGE_KEY_EVENT_DAY);
+  if (ev_day_t) {
+    int day = (int)ev_day_t->value->int32;
+    memset(&s_event, 0, sizeof(s_event));
+    if (day == 0 || day == 1) {
+      s_event.civil_date = day == 0 ? today_civil_date() : tomorrow_civil_date();
+      Tuple *start_t = dict_find(iterator, MESSAGE_KEY_EVENT_START_MIN);
+      Tuple *title_t = dict_find(iterator, MESSAGE_KEY_EVENT_TITLE);
+      Tuple *loc_t = dict_find(iterator, MESSAGE_KEY_EVENT_LOCATION);
+      if (start_t) s_event.start_min = (int16_t)start_t->value->int32;
+      if (title_t) snprintf(s_event.title, sizeof(s_event.title), "%s", title_t->value->cstring);
+      if (loc_t) snprintf(s_event.location, sizeof(s_event.location), "%s", loc_t->value->cstring);
+    }
+    save_event();
+    if (s_event_layer) {
+      layer_mark_dirty(s_event_layer);
     }
   }
 
-  if (ink) {
-    graphics_fill_rect(ctx, GRect(0, bounds.size.h - 1, bounds.size.w, 1), 0, GCornerNone);
-  }
-}
-
-static void draw_comp_highlow(GContext *ctx, int cx, int cy, int radius, GColor fg) {
-  graphics_context_set_text_color(ctx, fg);
-  GRect top_rect = GRect(cx - radius, cy - radius + 7, radius * 2, radius - 7);
-  graphics_draw_text(ctx, s_weather.loaded ? s_weather.high : "--", s_font_18,
-                     top_rect, GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-
-  int line_margin = 10;
-  graphics_context_set_stroke_color(ctx, fg);
-  graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_line(ctx, GPoint(cx - radius + line_margin, cy),
-                         GPoint(cx + radius - line_margin, cy));
-
-  GRect bot_rect = GRect(cx - radius, cy + 2, radius * 2, radius - 2);
-  graphics_draw_text(ctx, s_weather.loaded ? s_weather.low : "--", s_font_18,
-                     bot_rect, GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
-
-static void draw_comp_weather(GContext *ctx, int cx, int cy, int radius, GColor fg) {
-  const char *city = s_weather.loaded ? s_weather.city : "--";
-  const char *temp = s_weather.loaded ? s_weather.temp : "--";
-
-  graphics_context_set_text_color(ctx, fg);
-  GRect city_rect = GRect(cx - radius, cy - radius + 7, radius * 2, 18);
-  graphics_draw_text(ctx, city, s_font_14, city_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-  GRect temp_rect = GRect(cx - radius, cy - 8, radius * 2, 34);
-  graphics_draw_text(ctx, temp, s_font_28, temp_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-  if (s_weather.loaded) {
-    GSize ts = graphics_text_layout_get_content_size(
-        temp, s_font_28, temp_rect, GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter);
-    graphics_context_set_fill_color(ctx, fg);
-    graphics_fill_circle(ctx, GPoint(cx + ts.w / 2 + 3, temp_rect.origin.y + 7), 2);
-  }
-}
-
-static void draw_comp_week(GContext *ctx, int cx, int cy, int radius, GColor fg) {
-  graphics_context_set_text_color(ctx, fg);
-  GRect label_rect = GRect(cx - radius, cy - radius + 7, radius * 2, 18);
-  graphics_draw_text(ctx, "WK", s_font_14, label_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-  GRect num_rect = GRect(cx - radius, cy - 8, radius * 2, 34);
-  graphics_draw_text(ctx, &s_week_buffer[1], s_font_28, num_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
-
-static void draw_comp_uv(GContext *ctx, int cx, int cy, int radius, GColor fg) {
-  const char *uv_num = (s_weather.loaded && s_weather.uv[0]) ? s_weather.uv : "-";
-
-  graphics_context_set_text_color(ctx, fg);
-  GRect label_rect = GRect(cx - radius, cy - radius + 7, radius * 2, 18);
-  graphics_draw_text(ctx, "UV", s_font_14, label_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-  GRect num_rect = GRect(cx - radius, cy - 8, radius * 2, 34);
-  graphics_draw_text(ctx, uv_num, s_font_28, num_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
-
-static void draw_comp_sun(GContext *ctx, int cx, int cy, int radius,
-                          GColor fg, GColor bg, const char *time_str, bool fill_sun) {
-  int sun_r = 12;
-  int horizon_y = cy - 2;
-
-  if (fill_sun) {
-    graphics_context_set_fill_color(ctx, fg);
-    graphics_fill_circle(ctx, GPoint(cx, horizon_y), sun_r);
-    graphics_context_set_fill_color(ctx, bg);
-    graphics_fill_rect(ctx, GRect(cx - sun_r - 1, horizon_y, sun_r * 2 + 2, sun_r + 2), 0, GCornerNone);
-  } else {
-    graphics_context_set_stroke_color(ctx, fg);
-    graphics_context_set_stroke_width(ctx, 2);
-    graphics_draw_circle(ctx, GPoint(cx, horizon_y), sun_r);
-    // Mask bottom half of the stroked circle
-    graphics_context_set_fill_color(ctx, bg);
-    graphics_fill_rect(ctx, GRect(cx - sun_r - 1, horizon_y, sun_r * 2 + 2, sun_r + 2), 0, GCornerNone);
-  }
-
-  graphics_context_set_stroke_color(ctx, fg);
-  graphics_context_set_stroke_width(ctx, 2);
-  int hz_w = sun_r + 8;
-  graphics_draw_line(ctx, GPoint(cx - hz_w, horizon_y), GPoint(cx + hz_w, horizon_y));
-
-  int ray_start = sun_r + 3;
-  int ray_end = sun_r + 7;
-  graphics_draw_line(ctx, GPoint(cx, horizon_y - ray_start),
-                         GPoint(cx, horizon_y - ray_end));
-  int ds = ray_start * 7 / 10;
-  int de = ray_end * 7 / 10;
-  graphics_draw_line(ctx, GPoint(cx - ds, horizon_y - ds),
-                         GPoint(cx - de, horizon_y - de));
-  graphics_draw_line(ctx, GPoint(cx + ds, horizon_y - ds),
-                         GPoint(cx + de, horizon_y - de));
-
-  graphics_context_set_text_color(ctx, fg);
-  GRect time_rect = GRect(cx - radius, cy, radius * 2, 24);
-  graphics_draw_text(ctx, time_str, s_font_18, time_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
-
-static void draw_comp_steps(GContext *ctx, int cx, int cy, int radius, GColor fg) {
-  GSize bmp_size = gbitmap_get_bounds(s_sneaker_bitmap).size;
-  int icon_x = cx - bmp_size.w / 2;
-  int icon_y = cy + 4 - bmp_size.h;
-
-  #ifdef PBL_COLOR
-    static GColor palette[2];
-    palette[0] = fg;
-    palette[1] = GColorClear;
-    gbitmap_set_palette(s_sneaker_bitmap, palette, false);
-  #endif
-  graphics_context_set_compositing_mode(ctx, GCompOpSet);
-  graphics_draw_bitmap_in_rect(ctx, s_sneaker_bitmap, GRect(icon_x, icon_y, bmp_size.w, bmp_size.h));
-
-  graphics_context_set_text_color(ctx, fg);
-  GRect text_rect = GRect(cx - radius, cy, radius * 2, 24);
-  graphics_draw_text(ctx, s_steps_buffer, s_font_18, text_rect,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
-
-static void draw_bottom_comp(GContext *ctx, uint8_t type, int cx, int cy, int radius, bool is_primary) {
-  if (type == BOTTOM_COMP_NONE) return;
-
-  GColor fg, bg;
-  if (is_primary) {
-    fg = bg_color();
-    bg = fg_color();
-    graphics_context_set_fill_color(ctx, bg);
-    graphics_fill_circle(ctx, GPoint(cx, cy), radius);
-  } else {
-    fg = fg_color();
-    bg = bg_color();
-    graphics_context_set_stroke_color(ctx, fg);
-    graphics_context_set_stroke_width(ctx, s_settings.canvas == CANVAS_INK ? 1 : 2);
-    graphics_draw_circle(ctx, GPoint(cx, cy), radius);
-  }
-
-  switch (type) {
-    case BOTTOM_COMP_HIGHLOW:
-      draw_comp_highlow(ctx, cx, cy, radius, fg);
-      break;
-    case BOTTOM_COMP_WEATHER:
-      draw_comp_weather(ctx, cx, cy, radius, fg);
-      break;
-    case BOTTOM_COMP_SUNSET: {
-      const char *set = (s_weather.loaded && s_weather.sunset[0]) ? s_weather.sunset : "--";
-      draw_comp_sun(ctx, cx, cy, radius, fg, bg, set, true);
-      break;
+  // Settings
+  Tuple *color_t = dict_find(iterator, MESSAGE_KEY_PrimaryColor);
+  if (color_t) {
+    s_settings.primary_color = GColorFromHEX(color_t->value->int32);
+    save_settings();
+    if (s_event_layer) {
+      layer_mark_dirty(s_event_layer);
     }
-    case BOTTOM_COMP_SUNRISE: {
-      const char *rise = (s_weather.loaded && s_weather.sunrise[0]) ? s_weather.sunrise : "--";
-      draw_comp_sun(ctx, cx, cy, radius, fg, bg, rise, false);
-      break;
+    if (s_date_layer) {
+      layer_mark_dirty(s_date_layer);
     }
-    case BOTTOM_COMP_STEPS:
-      draw_comp_steps(ctx, cx, cy, radius, fg);
-      break;
-    case BOTTOM_COMP_WEEK:
-      draw_comp_week(ctx, cx, cy, radius, fg);
-      break;
-    case BOTTOM_COMP_UV:
-      draw_comp_uv(ctx, cx, cy, radius, fg);
-      break;
   }
 }
 
-static void complications_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-
-  int circle_radius = 30;
-  int y_center = bounds.size.h / 2;
-
-  int section_w = bounds.size.w / 3;
-  int cx1 = section_w / 2;
-  int cx2 = section_w + section_w / 2;
-  int cx3 = 2 * section_w + section_w / 2;
-
-  draw_bottom_comp(ctx, s_settings.bottom_comp_left, cx1, y_center, circle_radius, false);
-  draw_bottom_comp(ctx, s_settings.bottom_comp_primary, cx2, y_center, circle_radius, true);
-  draw_bottom_comp(ctx, s_settings.bottom_comp_right, cx3, y_center, circle_radius, false);
+static void inbox_dropped_callback(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped!");
 }
+
+static void outbox_failed_callback(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Outbox send failed!");
+}
+
+static void outbox_sent_callback(DictionaryIterator *iterator, void *context) {
+  APP_LOG(APP_LOG_LEVEL_INFO, "Outbox send success!");
+}
+
+// ---- Ticks ----
+
+static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
+  update_time(tick_time);
+  update_date_label(tick_time);
+  update_quiet_time();
+  if (s_event_layer) {
+    layer_mark_dirty(s_event_layer);  // countdown text
+  }
+  if (s_weather_layer) {
+    layer_mark_dirty(s_weather_layer);  // day/night icon swap
+  }
+
+  // Request weather + calendar refresh every 30 minutes (if phone is connected)
+  if (tick_time->tm_min % WEATHER_POLL_MINUTES == 0 &&
+      connection_service_peek_pebble_app_connection()) {
+    DictionaryIterator *iter;
+    if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
+      dict_write_uint8(iter, 0, 0);
+      app_message_outbox_send();
+    }
+  }
+}
+
+// ---- Layout ----
 
 static void update_layout() {
   GRect full = layer_get_bounds(s_window_layer);
   GRect unob = layer_get_unobstructed_bounds(s_window_layer);
-  int obstructed = full.size.h - unob.size.h;
-
-  layer_set_hidden(s_complications_layer, obstructed > 0);
-
-  int comp_space = 70;
-  int bottom = unob.size.h < (full.size.h - comp_space)
-             ? unob.size.h
-             : (full.size.h - comp_space);
-  int group_h = 76 + 18;
-  int group_y = TOP_BAR_HEIGHT + (bottom - TOP_BAR_HEIGHT - group_h) / 2;
-
-  layer_set_frame(text_layer_get_layer(s_time_layer),
-                  GRect(0, group_y, full.size.w, 76));
-  layer_set_frame(s_bt_layer,
-                  GRect(full.size.w - 54, TOP_BAR_HEIGHT + 2, 50, 22));
-  layer_set_frame(s_qt_layer,
-                  GRect(4, TOP_BAR_HEIGHT + 2, 50, 22));
-  layer_set_frame(s_brand_layer,
-                  GRect(0, group_y + 76, full.size.w, 20));
+  // Timeline Quick View: hide the weather block while obstructed
+  layer_set_hidden(s_weather_layer, unob.size.h < full.size.h);
 }
 
 static void unobstructed_change(AnimationProgress progress, void *context) {
@@ -756,51 +657,46 @@ static void main_window_load(Window *window) {
   s_window_layer = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(s_window_layer);
 
-  // Load resources
-  s_brand_bitmap = gbitmap_create_with_resource(RESOURCE_ID_PEBBLE_LOGO);
-  s_sneaker_bitmap = gbitmap_create_with_resource(RESOURCE_ID_SNEAKER_ICON);
   s_font_14 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_14));
   s_font_16 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_16));
   s_font_18 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_18));
-  s_font_28 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_28));
-  s_font_68 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_68));
+  s_font_20 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_EXTRABOLD_20));
+  s_font_40 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_EXTRABOLD_40));
+  s_font_68 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_EXTRABOLD_68));
 
-  // Top bar
-  s_top_bar_layer = layer_create(GRect(0, 0, bounds.size.w, TOP_BAR_HEIGHT));
-  layer_set_update_proc(s_top_bar_layer, top_bar_update_proc);
+  s_bolt_path = gpath_create(&BOLT_INFO);
 
-  // Time layer (positioned by update_layout)
-  s_time_layer = text_layer_create(GRect(0, 0, bounds.size.w, 76));
-  text_layer_set_background_color(s_time_layer, GColorClear);
-  text_layer_set_text_color(s_time_layer, fg_color());
-  text_layer_set_font(s_time_layer, s_font_68);
-  text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
+  // Date label: "SAT 15" top right above the time
+  s_date_layer = layer_create(GRect(0, 2, bounds.size.w, 26));
+  layer_set_update_proc(s_date_layer, date_update_proc);
 
-  // Brand text (positioned by update_layout)
-  s_brand_layer = layer_create(GRect(0, 0, bounds.size.w, 20));
-  layer_set_update_proc(s_brand_layer, brand_update_proc);
+  // Time: right-aligned to the same 10px edge as the date label
+  s_time_layer = layer_create(GRect(0, 16, bounds.size.w, 76));
+  layer_set_update_proc(s_time_layer, time_update_proc);
 
-  // Bluetooth disconnect indicator (positioned by update_layout)
-  s_bt_layer = layer_create(GRect(0, 0, 50, 22));
-  layer_set_update_proc(s_bt_layer, bt_update_proc);
-  layer_set_hidden(s_bt_layer, true);
+  // Event block: centered between the time and the weather block
+  s_event_layer = layer_create(GRect(0, 99, bounds.size.w, 60));
+  layer_set_update_proc(s_event_layer, event_update_proc);
 
-  // Quiet time indicator (positioned by update_layout)
-  s_qt_layer = layer_create(GRect(0, 0, 50, 22));
+  // Weather block: bottom third
+  s_weather_layer = layer_create(GRect(0, bounds.size.h - 76, bounds.size.w, 76));
+  layer_set_update_proc(s_weather_layer, weather_update_proc);
+
+  // BT / QT corner overlays in the (empty) top-left corner
+  s_qt_layer = layer_create(GRect(9, 2, 50, 16));
   layer_set_update_proc(s_qt_layer, qt_update_proc);
   layer_set_hidden(s_qt_layer, true);
 
-  // Complications layer at the bottom
-  int comp_height = 66;
-  s_complications_layer = layer_create(GRect(0, bounds.size.h - comp_height - 4, bounds.size.w, comp_height));
-  layer_set_update_proc(s_complications_layer, complications_update_proc);
+  s_bt_layer = layer_create(GRect(9, 18, 45, 16));
+  layer_set_update_proc(s_bt_layer, bt_update_proc);
+  layer_set_hidden(s_bt_layer, true);
 
-  layer_add_child(s_window_layer, s_brand_layer);
-  layer_add_child(s_window_layer, text_layer_get_layer(s_time_layer));
+  layer_add_child(s_window_layer, s_date_layer);
+  layer_add_child(s_window_layer, s_time_layer);
+  layer_add_child(s_window_layer, s_event_layer);
+  layer_add_child(s_window_layer, s_weather_layer);
   layer_add_child(s_window_layer, s_bt_layer);
   layer_add_child(s_window_layer, s_qt_layer);
-  layer_add_child(s_window_layer, s_complications_layer);
-  layer_add_child(s_window_layer, s_top_bar_layer);
 
   UnobstructedAreaHandlers ua_handlers = {
     .change = unobstructed_change,
@@ -812,27 +708,33 @@ static void main_window_load(Window *window) {
 
 static void main_window_unload(Window *window) {
   unobstructed_area_service_unsubscribe();
-  layer_destroy(s_brand_layer);
-  text_layer_destroy(s_time_layer);
-  layer_destroy(s_complications_layer);
-  layer_destroy(s_top_bar_layer);
+  layer_destroy(s_date_layer);
+  layer_destroy(s_time_layer);
+  layer_destroy(s_event_layer);
+  layer_destroy(s_weather_layer);
   layer_destroy(s_bt_layer);
   layer_destroy(s_qt_layer);
-  gbitmap_destroy(s_brand_bitmap);
-  gbitmap_destroy(s_sneaker_bitmap);
+  gpath_destroy(s_bolt_path);
   fonts_unload_custom_font(s_font_14);
   fonts_unload_custom_font(s_font_16);
   fonts_unload_custom_font(s_font_18);
-  fonts_unload_custom_font(s_font_28);
+  fonts_unload_custom_font(s_font_20);
+  fonts_unload_custom_font(s_font_40);
   fonts_unload_custom_font(s_font_68);
 }
 
 static void init() {
+  // v1.x cached weather (string format) is obsolete — drop it once
+  if (persist_exists(OLD_WEATHER_KEY)) {
+    persist_delete(OLD_WEATHER_KEY);
+  }
+
   load_settings();
   load_weather();
-  update_mini_weather_buffers();
+  load_event();
+
   s_main_window = window_create();
-  window_set_background_color(s_main_window, bg_color());
+  window_set_background_color(s_main_window, GColorWhite);
   window_set_window_handlers(s_main_window, (WindowHandlers) {
     .load = main_window_load,
     .unload = main_window_unload
@@ -840,11 +742,8 @@ static void init() {
   window_stack_push(s_main_window, true);
 
   update_time(NULL);
-  update_status_buffer(NULL);
+  update_date_label(NULL);
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
-
-  battery_state_service_subscribe(battery_callback);
-  battery_callback(battery_state_service_peek());
 
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_app_callback
@@ -855,11 +754,13 @@ static void init() {
   update_bt_visibility();
   update_quiet_time();
 
+#ifndef DEMO
   app_message_register_inbox_received(inbox_received_callback);
   app_message_register_inbox_dropped(inbox_dropped_callback);
   app_message_register_outbox_failed(outbox_failed_callback);
   app_message_register_outbox_sent(outbox_sent_callback);
   app_message_open(256, 256);
+#endif
 }
 
 static void deinit() {

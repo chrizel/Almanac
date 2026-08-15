@@ -1,6 +1,8 @@
 # Percival
 
-Pebble watchface built with Pebble SDK 3. Displays time, date, battery, and weather complications.
+Pebble watchface built with Pebble SDK 3. Displays time, date, steps, battery, the next
+calendar event (ICS feed), and a weather instrument (condition icon, sun position, and
+current temperature between daily low/high).
 
 Percival was published April 7, 2026 in the Pebble store:
 https://apps.repebble.com/2799cd581c2a4bbbade7f3da
@@ -18,16 +20,18 @@ Run `pebble clean` when adding or removing messageKeys in package.json — the b
 
 ## Structure
 
-- `src/c/main.c` — watchface C code (UI, tick handler, persistent storage, weather message handling)
-- `src/pkjs/index.js` — companion JS (geolocation, Open-Meteo weather API, BigDataCloud reverse geocoding)
+- `src/c/main.c` — watchface C code (UI, tick handler, persistent storage, weather/event message handling, `#ifdef DEMO` stub block for screenshots)
+- `src/pkjs/index.js` — companion JS (geolocation, Open-Meteo weather API, ICS calendar fetch)
+- `src/pkjs/ics.js` — pure ICS parser (VEVENT + DAILY/WEEKLY recurrence); testable standalone with `node`
 - `src/pkjs/config.js` — Clay settings page config
 - `package.json` — app metadata, message keys, font resources
 
 ## Key conventions
 
 - Weather polling interval is defined as `WEATHER_POLL_MINUTES` in both `main.c` and `index.js` — keep them in sync
-- Persistent storage keys: `SETTINGS_KEY = 1` (accent color), `WEATHER_KEY = 2` (cached weather data)
-- Temperature unit is a Clay setting (`TempUnit`); the JS reads it from localStorage at fetch time and re-fetches on `webviewclosed` so unit changes apply immediately
+- Persistent storage keys: `SETTINGS_KEY = 1` (settings, append-only struct), `WEATHER_KEY = 3` (weather cache, ints), `EVENT_KEY = 4` (next-event cache). Key 2 held the v1.x string weather cache and is deleted on first run
+- The condition enum (0 clear … 6 storm) is shared between `conditionFromWmo()` in `index.js` and `enum Condition` in `main.c` — keep them in sync
+- Temperature unit (`TempUnit`) and calendar feed (`IcsUrl`) are Clay settings; the JS reads them from localStorage at fetch time and re-fetches on `webviewclosed` so changes apply immediately
 
 ## Marketing screenshots
 
@@ -53,5 +57,8 @@ The SPI flash image occaisonally corrupts. The fix is to delete it so pebble-too
 
 Replace `<platform>` with the emulator target (e.g. `emery`, `basalt`).
 ```
+# macOS
 rm "$HOME/Library/Application Support/Pebble SDK/4.9.148/<platform>/qemu_spi_flash.bin"
+# Linux
+rm "$HOME/.local/share/pebble-sdk/<sdk-version>/<platform>/qemu_spi_flash.bin"
 ```

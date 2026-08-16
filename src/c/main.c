@@ -889,15 +889,15 @@ static void main_window_load(Window *window) {
   layer_set_update_proc(s_topleft_layer, topleft_update_proc);
 
   // Time: right-aligned to the same 10px edge as the date label
-  s_time_layer = layer_create(GRect(0, 16, bounds.size.w, 76));
+  s_time_layer = layer_create(GRect(0, 21, bounds.size.w, 76));
   layer_set_update_proc(s_time_layer, time_update_proc);
 
   // Event block: centered between the time and the weather block
-  s_event_layer = layer_create(GRect(0, 99, bounds.size.w, 60));
+  s_event_layer = layer_create(GRect(0, 107, bounds.size.w, 60));
   layer_set_update_proc(s_event_layer, event_update_proc);
 
-  // Weather block: bottom third
-  s_weather_layer = layer_create(GRect(0, bounds.size.h - 76, bounds.size.w, 76));
+  // Weather block: bottom third, ink bottom-aligned to match the 8px top padding
+  s_weather_layer = layer_create(GRect(0, bounds.size.h - 64, bounds.size.w, 76));
   layer_set_update_proc(s_weather_layer, weather_update_proc);
 
   // BT / QT corner overlays in the (empty) top-left corner

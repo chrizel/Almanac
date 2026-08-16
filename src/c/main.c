@@ -22,6 +22,10 @@
 #define DEMO_EVENT_DAY 0          // 0 today · 1 tomorrow · -1 none
 #define DEMO_EVENT_TITLE "Design Review"
 #define DEMO_EVENT_LOCATION "Office HQ, Room B2"
+#define DEMO_TOPLEFT 0            // 0 none · 1 steps · 2 heart rate · 3 battery
+#define DEMO_STEPS 8412
+#define DEMO_HEART 72
+#define DEMO_BATTERY 80
 #endif
 
 extern uint32_t MESSAGE_KEY_TEMPERATURE;
@@ -36,6 +40,7 @@ extern uint32_t MESSAGE_KEY_EVENT_START_MIN;
 extern uint32_t MESSAGE_KEY_EVENT_TITLE;
 extern uint32_t MESSAGE_KEY_EVENT_LOCATION;
 extern uint32_t MESSAGE_KEY_Language;
+extern uint32_t MESSAGE_KEY_TopLeft;
 
 // Shared with conditionFromWmo() in src/pkjs/index.js
 enum Condition {
@@ -46,6 +51,15 @@ enum Condition {
   COND_RAIN = 4,
   COND_SNOW = 5,
   COND_STORM = 6
+};
+
+// Values shared with the TopLeft select in src/pkjs/config.js
+enum TopLeft {
+  TL_NONE = 0,
+  TL_STEPS = 1,
+  TL_HEART = 2,
+  TL_BATTERY = 3,
+  TL_COUNT
 };
 
 // Values shared with the Language select in src/pkjs/config.js
@@ -74,6 +88,7 @@ static Layer *s_event_layer;
 static Layer *s_weather_layer;
 static Layer *s_bt_layer;
 static Layer *s_qt_layer;
+static Layer *s_topleft_layer;
 static bool s_bt_app_connected;
 static bool s_bt_radio_connected;
 
@@ -85,10 +100,17 @@ static GFont s_font_40;
 static GFont s_font_68;
 
 static GPath *s_bolt_path;
+static GPath *s_heart_path;
 
 static const GPathInfo BOLT_INFO = {
   .num_points = 7,
   .points = (GPoint[]) {{1, -3}, {-6, 8}, {-1, 8}, {-4, 18}, {8, 6}, {3, 6}, {7, -3}}
+};
+
+// Bottom wedge of the heart icon; two filled circles form the lobes
+static const GPathInfo HEART_INFO = {
+  .num_points = 3,
+  .points = (GPoint[]) {{-8, -1}, {8, -1}, {0, 9}}
 };
 
 // New fields must be appended to the end — never insert or reorder.
@@ -106,6 +128,7 @@ typedef struct {
   uint8_t bottom_comp_right;
   uint8_t canvas;
   uint8_t language;  // enum Lang
+  uint8_t top_left;  // enum TopLeft
 } Settings;
 
 static Settings s_settings;
@@ -123,6 +146,7 @@ static void load_settings() {
   default_settings();
 #ifdef DEMO
   s_settings.primary_color = DEMO_ACCENT;
+  s_settings.top_left = DEMO_TOPLEFT;
 #else
   if (persist_exists(SETTINGS_KEY)) {
     int stored = persist_get_size(SETTINGS_KEY);
@@ -370,6 +394,107 @@ static void date_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, GColorBlack);
   graphics_draw_text(ctx, s_day_buffer, s_font_20, GRect(day_x, 0, day_size.w + 2, 24),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+// ---- Top-left instrument (steps / heart rate / battery) ----
+
+static void topleft_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  int mode = s_settings.top_left;
+  if (mode <= TL_NONE || mode >= TL_COUNT) return;
+
+  char text[12];
+  if (mode == TL_STEPS) {
+#ifdef DEMO
+    int steps = DEMO_STEPS;
+#elif defined(PBL_HEALTH)
+    int steps = (int)health_service_sum_today(HealthMetricStepCount);
+#else
+    int steps = 0;
+#endif
+    snprintf(text, sizeof(text), "%d", steps);
+  } else if (mode == TL_HEART) {
+#ifdef DEMO
+    int bpm = DEMO_HEART;
+#elif defined(PBL_HEALTH)
+    int bpm = (int)health_service_peek_current_value(HealthMetricHeartRateBPM);
+#else
+    int bpm = 0;
+#endif
+    if (bpm > 0) {
+      snprintf(text, sizeof(text), "%d", bpm);
+    } else {
+      snprintf(text, sizeof(text), "--");
+    }
+  } else {
+#ifdef DEMO
+    int pct = DEMO_BATTERY;
+#else
+    int pct = battery_state_service_peek().charge_percent;
+#endif
+    snprintf(text, sizeof(text), "%d%%", pct);
+  }
+
+  graphics_context_set_fill_color(ctx, s_settings.primary_color);
+  graphics_context_set_stroke_color(ctx, s_settings.primary_color);
+  graphics_context_set_stroke_width(ctx, 2);
+
+  switch (mode) {
+    case TL_STEPS:
+      // Two footprints stepping diagonally: sole + heel dot each
+      graphics_fill_rect(ctx, GRect(10, 3, 6, 9), 3, GCornersAll);
+      graphics_fill_circle(ctx, GPoint(13, 16), 2);
+      graphics_fill_rect(ctx, GRect(18, 9, 6, 9), 3, GCornersAll);
+      graphics_fill_circle(ctx, GPoint(21, 22), 2);
+      break;
+    case TL_HEART:
+      graphics_fill_circle(ctx, GPoint(13, 8), 4);
+      graphics_fill_circle(ctx, GPoint(21, 8), 4);
+      gpath_move_to(s_heart_path, GPoint(17, 11));
+      gpath_draw_filled(ctx, s_heart_path);
+      break;
+    case TL_BATTERY: {
+#ifdef DEMO
+      int pct = DEMO_BATTERY;
+#else
+      int pct = battery_state_service_peek().charge_percent;
+#endif
+      graphics_draw_round_rect(ctx, GRect(10, 6, 17, 12), 2);
+      graphics_fill_rect(ctx, GRect(28, 9, 2, 6), 0, GCornerNone);
+      int fill_w = pct * 11 / 100;
+      if (fill_w > 0) {
+        graphics_fill_rect(ctx, GRect(13, 9, fill_w, 6), 0, GCornerNone);
+      }
+      break;
+    }
+  }
+
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, text, s_font_20, GRect(32, 0, b.size.w / 2, 24),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+#ifdef PBL_HEALTH
+static void health_handler(HealthEventType event, void *context) {
+  if (s_topleft_layer) {
+    layer_mark_dirty(s_topleft_layer);
+  }
+}
+#endif
+
+static void battery_handler(BatteryChargeState state) {
+  if (s_topleft_layer) {
+    layer_mark_dirty(s_topleft_layer);
+  }
+}
+
+// BT/QT normally sit in the top-left corner; drop them below the
+// instrument when it occupies that row.
+static void position_corner_layers() {
+  if (!s_qt_layer || !s_bt_layer) return;
+  int y = s_settings.top_left == TL_NONE ? 2 : 28;
+  layer_set_frame(s_qt_layer, GRect(9, y, 50, 16));
+  layer_set_frame(s_bt_layer, GRect(9, y + 16, 45, 16));
 }
 
 // ---- Event block ----
@@ -647,6 +772,25 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     if (s_date_layer) {
       layer_mark_dirty(s_date_layer);
     }
+    if (s_topleft_layer) {
+      layer_mark_dirty(s_topleft_layer);
+    }
+  }
+
+  Tuple *topleft_t = dict_find(iterator, MESSAGE_KEY_TopLeft);
+  if (topleft_t) {
+    // Clay may deliver select values as int or as a digit string
+    int v = topleft_t->type == TUPLE_CSTRING
+        ? topleft_t->value->cstring[0] - '0'
+        : (int)topleft_t->value->int32;
+    if (v >= 0 && v < TL_COUNT && v != s_settings.top_left) {
+      s_settings.top_left = v;
+      save_settings();
+      position_corner_layers();
+      if (s_topleft_layer) {
+        layer_mark_dirty(s_topleft_layer);
+      }
+    }
   }
 
   Tuple *lang_t = dict_find(iterator, MESSAGE_KEY_Language);
@@ -690,6 +834,9 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   if (s_weather_layer) {
     layer_mark_dirty(s_weather_layer);  // day/night icon swap
   }
+  if (s_topleft_layer) {
+    layer_mark_dirty(s_topleft_layer);  // steps / heart rate refresh
+  }
 
   // Request weather + calendar refresh every 30 minutes (if phone is connected)
   if (tick_time->tm_min % WEATHER_POLL_MINUTES == 0 &&
@@ -731,10 +878,15 @@ static void main_window_load(Window *window) {
   s_font_68 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_EXTRABOLD_68));
 
   s_bolt_path = gpath_create(&BOLT_INFO);
+  s_heart_path = gpath_create(&HEART_INFO);
 
   // Date label: "SAT 15" top right above the time
   s_date_layer = layer_create(GRect(0, 2, bounds.size.w, 26));
   layer_set_update_proc(s_date_layer, date_update_proc);
+
+  // Top-left instrument: same row and font as the date label
+  s_topleft_layer = layer_create(GRect(0, 2, bounds.size.w, 26));
+  layer_set_update_proc(s_topleft_layer, topleft_update_proc);
 
   // Time: right-aligned to the same 10px edge as the date label
   s_time_layer = layer_create(GRect(0, 16, bounds.size.w, 76));
@@ -758,6 +910,7 @@ static void main_window_load(Window *window) {
   layer_set_hidden(s_bt_layer, true);
 
   layer_add_child(s_window_layer, s_date_layer);
+  layer_add_child(s_window_layer, s_topleft_layer);
   layer_add_child(s_window_layer, s_time_layer);
   layer_add_child(s_window_layer, s_event_layer);
   layer_add_child(s_window_layer, s_weather_layer);
@@ -769,18 +922,21 @@ static void main_window_load(Window *window) {
     .did_change = unobstructed_did_change
   };
   unobstructed_area_service_subscribe(ua_handlers, NULL);
+  position_corner_layers();
   update_layout();
 }
 
 static void main_window_unload(Window *window) {
   unobstructed_area_service_unsubscribe();
   layer_destroy(s_date_layer);
+  layer_destroy(s_topleft_layer);
   layer_destroy(s_time_layer);
   layer_destroy(s_event_layer);
   layer_destroy(s_weather_layer);
   layer_destroy(s_bt_layer);
   layer_destroy(s_qt_layer);
   gpath_destroy(s_bolt_path);
+  gpath_destroy(s_heart_path);
   fonts_unload_custom_font(s_font_14);
   fonts_unload_custom_font(s_font_16);
   fonts_unload_custom_font(s_font_18);
@@ -819,6 +975,11 @@ static void init() {
   s_bt_radio_connected = bluetooth_connection_service_peek();
   update_bt_visibility();
   update_quiet_time();
+
+  battery_state_service_subscribe(battery_handler);
+#ifdef PBL_HEALTH
+  health_service_events_subscribe(health_handler, NULL);
+#endif
 
 #ifndef DEMO
   app_message_register_inbox_received(inbox_received_callback);

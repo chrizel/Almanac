@@ -24,6 +24,18 @@ module.exports = [
       },
       {
         "type": "select",
+        "messageKey": "TopLeft",
+        "label": "Top Left Display",
+        "defaultValue": 0,
+        "options": [
+          {"label": "None", "value": 0},
+          {"label": "Steps", "value": 1},
+          {"label": "Heart Rate", "value": 2},
+          {"label": "Battery", "value": 3}
+        ]
+      },
+      {
+        "type": "select",
         "messageKey": "Language",
         "label": "Language",
         "defaultValue": 0,

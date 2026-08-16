@@ -24,7 +24,8 @@
     },
     "capabilities": [
       "configurable",
-      "location"
+      "location",
+      "health"
     ],
     "messageKeys": {
       "TEMPERATURE": 0,
@@ -51,7 +52,8 @@
       "EVENT_START_MIN": 21,
       "EVENT_TITLE": 22,
       "EVENT_LOCATION": 23,
-      "Language": 24
+      "Language": 24,
+      "TopLeft": 25
     },
     "resources": {
       "media": [

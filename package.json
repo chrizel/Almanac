@@ -53,7 +53,9 @@
       "EVENT_TITLE": 22,
       "EVENT_LOCATION": 23,
       "Language": 24,
-      "TopLeft": 25
+      "TopLeft": 25,
+      "BackgroundColor": 26,
+      "ForegroundColor": 27
     },
     "resources": {
       "media": [

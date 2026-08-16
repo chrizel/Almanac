@@ -13,6 +13,18 @@ module.exports = [
         "defaultValue": "0x0000FF"
       },
       {
+        "type": "color",
+        "messageKey": "BackgroundColor",
+        "label": "Background Color",
+        "defaultValue": "0xFFFFFF"
+      },
+      {
+        "type": "color",
+        "messageKey": "ForegroundColor",
+        "label": "Text Color",
+        "defaultValue": "0x000000"
+      },
+      {
         "type": "select",
         "messageKey": "TempUnit",
         "label": "Temperature Unit",

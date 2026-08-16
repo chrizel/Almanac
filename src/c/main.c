@@ -41,6 +41,8 @@ extern uint32_t MESSAGE_KEY_EVENT_TITLE;
 extern uint32_t MESSAGE_KEY_EVENT_LOCATION;
 extern uint32_t MESSAGE_KEY_Language;
 extern uint32_t MESSAGE_KEY_TopLeft;
+extern uint32_t MESSAGE_KEY_BackgroundColor;
+extern uint32_t MESSAGE_KEY_ForegroundColor;
 
 // Shared with conditionFromWmo() in src/pkjs/index.js
 enum Condition {
@@ -129,6 +131,8 @@ typedef struct {
   uint8_t canvas;
   uint8_t language;  // enum Lang
   uint8_t top_left;  // enum TopLeft
+  GColor bg_color;
+  GColor fg_color;
 } Settings;
 
 static Settings s_settings;
@@ -140,6 +144,8 @@ static int lang() {
 static void default_settings() {
   memset(&s_settings, 0, sizeof(s_settings));
   s_settings.primary_color = GColorBlue;
+  s_settings.bg_color = GColorWhite;
+  s_settings.fg_color = GColorBlack;
 }
 
 static void load_settings() {
@@ -352,7 +358,7 @@ static void time_update_proc(Layer *layer, GContext *ctx) {
   }
 
   int x = b.size.w - 10 - total;
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, s_settings.fg_color);
   for (int i = 0; i < n; i++) {
     glyph[0] = s_time_buffer[i];
     graphics_draw_text(ctx, glyph, s_font_68, GRect(x, 0, widths[i] + 4, b.size.h),
@@ -391,7 +397,7 @@ static void date_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, s_settings.primary_color);
   graphics_draw_text(ctx, s_dow_buffer, s_font_20, GRect(dow_x, 0, dow_size.w + 2, 24),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, s_settings.fg_color);
   graphics_draw_text(ctx, s_day_buffer, s_font_20, GRect(day_x, 0, day_size.w + 2, 24),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
@@ -469,7 +475,7 @@ static void topleft_update_proc(Layer *layer, GContext *ctx) {
     }
   }
 
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, s_settings.fg_color);
   graphics_draw_text(ctx, text, s_font_20, GRect(32, 0, b.size.w / 2, 24),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
@@ -547,7 +553,7 @@ static void event_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, s_settings.primary_color);
   graphics_draw_text(ctx, when, s_font_16, GRect(tx, 0, tw, 18),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, s_settings.fg_color);
   graphics_draw_text(ctx, s_event.title, s_font_20, GRect(tx, when_h, tw, 24),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   if (loc_h) {
@@ -559,7 +565,7 @@ static void event_update_proc(Layer *layer, GContext *ctx) {
 // ---- Weather (big icon · current temp · stacked hi/lo) ----
 
 static void draw_cloud(GContext *ctx, int cx, int cy) {
-  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_context_set_fill_color(ctx, s_settings.fg_color);
   graphics_fill_circle(ctx, GPoint(cx - 6, cy + 1), 7);
   graphics_fill_circle(ctx, GPoint(cx + 3, cy - 3), 9);
   graphics_fill_rect(ctx, GRect(cx - 13, cy + 1, 27, 9), 4, GCornersAll);
@@ -577,8 +583,8 @@ static void draw_sun_rays(GContext *ctx, int cx, int cy, int r1, int r2) {
 }
 
 static void draw_condition_icon(GContext *ctx, int cx, int cy, int cond, bool night) {
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_context_set_stroke_color(ctx, s_settings.fg_color);
+  graphics_context_set_fill_color(ctx, s_settings.fg_color);
   graphics_context_set_stroke_width(ctx, 2);
 
   switch (cond) {
@@ -586,7 +592,7 @@ static void draw_condition_icon(GContext *ctx, int cx, int cy, int cond, bool ni
       if (night) {
         // Crescent: filled disc with a background-colored punch-out
         graphics_fill_circle(ctx, GPoint(cx, cy), 11);
-        graphics_context_set_fill_color(ctx, GColorWhite);
+        graphics_context_set_fill_color(ctx, s_settings.bg_color);
         graphics_fill_circle(ctx, GPoint(cx + 7, cy - 7), 10);
       } else {
         graphics_fill_circle(ctx, GPoint(cx, cy), 6);
@@ -667,7 +673,7 @@ static void weather_update_proc(Layer *layer, GContext *ctx) {
     draw_condition_icon(ctx, x + icon_w / 2, center_y, s_weather.condition, night);
   }
 
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, s_settings.fg_color);
   graphics_draw_text(ctx, cur, s_font_40,
                      GRect(x + icon_w + gap, center_y - 26, cur_size.w + 2, 50),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
@@ -705,7 +711,7 @@ static void bt_update_proc(Layer *layer, GContext *ctx) {
 
 static void qt_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, s_settings.fg_color);
   graphics_draw_text(ctx, "QT", s_font_14, bounds,
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
@@ -774,6 +780,18 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     }
     if (s_topleft_layer) {
       layer_mark_dirty(s_topleft_layer);
+    }
+  }
+
+  Tuple *bg_t = dict_find(iterator, MESSAGE_KEY_BackgroundColor);
+  Tuple *fg_t = dict_find(iterator, MESSAGE_KEY_ForegroundColor);
+  if (bg_t || fg_t) {
+    if (bg_t) s_settings.bg_color = GColorFromHEX(bg_t->value->int32);
+    if (fg_t) s_settings.fg_color = GColorFromHEX(fg_t->value->int32);
+    save_settings();
+    window_set_background_color(s_main_window, s_settings.bg_color);
+    if (s_window_layer) {
+      layer_mark_dirty(s_window_layer);  // repaints all children
     }
   }
 
@@ -956,7 +974,7 @@ static void init() {
   load_event();
 
   s_main_window = window_create();
-  window_set_background_color(s_main_window, GColorWhite);
+  window_set_background_color(s_main_window, s_settings.bg_color);
   window_set_window_handlers(s_main_window, (WindowHandlers) {
     .load = main_window_load,
     .unload = main_window_unload

@@ -35,6 +35,7 @@ extern uint32_t MESSAGE_KEY_EVENT_DAY;
 extern uint32_t MESSAGE_KEY_EVENT_START_MIN;
 extern uint32_t MESSAGE_KEY_EVENT_TITLE;
 extern uint32_t MESSAGE_KEY_EVENT_LOCATION;
+extern uint32_t MESSAGE_KEY_Language;
 
 // Shared with conditionFromWmo() in src/pkjs/index.js
 enum Condition {
@@ -45,6 +46,18 @@ enum Condition {
   COND_RAIN = 4,
   COND_SNOW = 5,
   COND_STORM = 6
+};
+
+// Values shared with the Language select in src/pkjs/config.js
+enum Lang {
+  LANG_EN = 0,
+  LANG_DE = 1,
+  LANG_FR = 2,
+  LANG_ES = 3,
+  LANG_IT = 4,
+  LANG_PT = 5,
+  LANG_NL = 6,
+  LANG_COUNT
 };
 
 #define WEATHER_POLL_MINUTES 30
@@ -92,9 +105,14 @@ typedef struct {
   uint8_t bottom_comp_primary;
   uint8_t bottom_comp_right;
   uint8_t canvas;
+  uint8_t language;  // enum Lang
 } Settings;
 
 static Settings s_settings;
+
+static int lang() {
+  return s_settings.language < LANG_COUNT ? s_settings.language : LANG_EN;
+}
 
 static void default_settings() {
   memset(&s_settings, 0, sizeof(s_settings));
@@ -189,6 +207,37 @@ static void save_event() {
 
 static char s_dow_buffer[6];
 static char s_day_buffer[4];
+
+// ---- Localized strings (indexed by enum Lang) ----
+// Accented glyphs are UTF-8 escapes; adjacent string literals split an
+// escape from a following hex-digit letter ("\xC3\x81" "B", not "\xC3\x81B").
+
+static const char *DAYS[LANG_COUNT][7] = {
+  {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"},                          // EN
+  {"SO", "MO", "DI", "MI", "DO", "FR", "SA"},                                 // DE
+  {"DIM", "LUN", "MAR", "MER", "JEU", "VEN", "SAM"},                          // FR
+  {"DOM", "LUN", "MAR", "MI\xC3\x89", "JUE", "VIE", "S\xC3\x81" "B"},         // ES
+  {"DOM", "LUN", "MAR", "MER", "GIO", "VEN", "SAB"},                          // IT
+  {"DOM", "SEG", "TER", "QUA", "QUI", "SEX", "S\xC3\x81" "B"},                // PT
+  {"ZO", "MA", "DI", "WO", "DO", "VR", "ZA"}                                  // NL
+};
+
+static const char *STR_NOW[LANG_COUNT] = {
+  "NOW", "JETZT", "MAINTENANT", "AHORA", "ORA", "AGORA", "NU"
+};
+
+static const char *STR_IN[LANG_COUNT] = {
+  "IN", "IN", "DANS", "EN", "TRA", "EM", "OVER"
+};
+
+static const char *STR_TOMORROW[LANG_COUNT] = {
+  "TOMORROW", "MORGEN", "DEMAIN", "MA\xC3\x91" "ANA", "DOMANI",
+  "AMANH\xC3\x83", "MORGEN"
+};
+
+static const char *STR_HOUR[LANG_COUNT] = {
+  "H", "STD", "H", "H", "H", "H", "U"
+};
 
 static struct tm *get_time(struct tm *t) {
   if (t) return t;
@@ -292,8 +341,7 @@ static void time_update_proc(Layer *layer, GContext *ctx) {
 
 static void update_date_label(struct tm *tick_time) {
   struct tm *t = get_time(tick_time);
-  static const char *days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-  snprintf(s_dow_buffer, sizeof(s_dow_buffer), "%s", days[t->tm_wday]);
+  snprintf(s_dow_buffer, sizeof(s_dow_buffer), "%s", DAYS[lang()][t->tm_wday]);
   snprintf(s_day_buffer, sizeof(s_day_buffer), "%d", t->tm_mday);
 #ifdef DEMO
   snprintf(s_dow_buffer, sizeof(s_dow_buffer), DEMO_DOW);
@@ -342,20 +390,22 @@ static void event_update_proc(Layer *layer, GContext *ctx) {
   format_clock_min(s_event.start_min, timebuf, sizeof(timebuf));
 
   char when[40];
+  int l = lang();
   if (day == 0) {
     int d = s_event.start_min - now_minutes();
     if (d < -5) return;  // passed; hidden until the next JS refresh replaces it
     if (d <= 0) {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 NOW", timebuf);
+      snprintf(when, sizeof(when), "%s \xC2\xB7 %s", timebuf, STR_NOW[l]);
     } else if (d < 60) {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 IN %d MIN", timebuf, d);
+      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d MIN", timebuf, STR_IN[l], d);
     } else if (d % 60 == 0) {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 IN %d H", timebuf, d / 60);
+      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d %s", timebuf, STR_IN[l], d / 60, STR_HOUR[l]);
     } else {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 IN %d H %d MIN", timebuf, d / 60, d % 60);
+      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d %s %d MIN",
+               timebuf, STR_IN[l], d / 60, STR_HOUR[l], d % 60);
     }
   } else {
-    snprintf(when, sizeof(when), "TOMORROW \xC2\xB7 %s", timebuf);
+    snprintf(when, sizeof(when), "%s \xC2\xB7 %s", STR_TOMORROW[l], timebuf);
   }
 
   GRect b = layer_get_bounds(layer);
@@ -596,6 +646,22 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     }
     if (s_date_layer) {
       layer_mark_dirty(s_date_layer);
+    }
+  }
+
+  Tuple *lang_t = dict_find(iterator, MESSAGE_KEY_Language);
+  if (lang_t) {
+    // Clay may deliver select values as int or as a digit string
+    int v = lang_t->type == TUPLE_CSTRING
+        ? lang_t->value->cstring[0] - '0'
+        : (int)lang_t->value->int32;
+    if (v >= 0 && v < LANG_COUNT && v != s_settings.language) {
+      s_settings.language = v;
+      save_settings();
+      update_date_label(NULL);
+      if (s_event_layer) {
+        layer_mark_dirty(s_event_layer);
+      }
     }
   }
 }

@@ -21,6 +21,21 @@ module.exports = [
           {"label": "Fahrenheit (°F)", "value": 0},
           {"label": "Celsius (°C)", "value": 1}
         ]
+      },
+      {
+        "type": "select",
+        "messageKey": "Language",
+        "label": "Language",
+        "defaultValue": 0,
+        "options": [
+          {"label": "English", "value": 0},
+          {"label": "Deutsch", "value": 1},
+          {"label": "Français", "value": 2},
+          {"label": "Español", "value": 3},
+          {"label": "Italiano", "value": 4},
+          {"label": "Português", "value": 5},
+          {"label": "Nederlands", "value": 6}
+        ]
       }
     ]
   },

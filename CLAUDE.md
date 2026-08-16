@@ -31,6 +31,7 @@ Run `pebble clean` when adding or removing messageKeys in package.json — the b
 - Weather polling interval is defined as `WEATHER_POLL_MINUTES` in both `main.c` and `index.js` — keep them in sync
 - Persistent storage keys: `SETTINGS_KEY = 1` (settings, append-only struct), `WEATHER_KEY = 3` (weather cache, ints), `EVENT_KEY = 4` (next-event cache). Key 2 held the v1.x string weather cache and is deleted on first run
 - The condition enum (0 clear … 6 storm) is shared between `conditionFromWmo()` in `index.js` and `enum Condition` in `main.c` — keep them in sync
+- The language values (0 English … 6 Dutch) are shared between the `Language` select in `config.js` and `enum Lang` in `main.c` — keep them in sync. All localized UI strings live in the `DAYS`/`STR_*` tables in `main.c`; accented glyphs must stay within the `À-ÿ` range covered by the font characterRegex in `package.json`
 - Temperature unit (`TempUnit`) and calendar feed (`IcsUrl`) are Clay settings; the JS reads them from localStorage at fetch time and re-fetches on `webviewclosed` so changes apply immediately
 
 ## Marketing screenshots

@@ -50,7 +50,8 @@
       "EVENT_DAY": 20,
       "EVENT_START_MIN": 21,
       "EVENT_TITLE": 22,
-      "EVENT_LOCATION": 23
+      "EVENT_LOCATION": 23,
+      "Language": 24
     },
     "resources": {
       "media": [

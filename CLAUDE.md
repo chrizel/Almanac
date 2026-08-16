@@ -1,11 +1,14 @@
-# Percival
+# Almanac
 
-Pebble watchface built with Pebble SDK 3. Displays time, date, steps, battery, the next
-calendar event (ICS feed), and a weather instrument (condition icon, sun position, and
-current temperature between daily low/high).
+Pebble watchface built with Pebble SDK 3. Displays the date, the time, the next calendar
+event (ICS feed), and weather (condition icon, current temperature, today's high and low),
+plus an optional top-left instrument (steps, heart rate, or battery).
 
-Percival was published April 7, 2026 in the Pebble store:
-https://apps.repebble.com/2799cd581c2a4bbbade7f3da
+Almanac is a fork of [Percival](https://github.com/barefootford/Percival) by Andrew Ford,
+redesigned around the time / next-event / weather blocks. It carries its own UUID
+(`8841834c-a447-43e2-b564-1f566e017987`) and is not yet published in the Pebble store.
+Percival's own store listing is https://apps.repebble.com/2799cd581c2a4bbbade7f3da — do not
+reuse its UUID.
 
 ## Build
 

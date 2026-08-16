@@ -1,7 +1,7 @@
 {
-  "name": "percival",
-  "author": "Andrew Ford",
-  "version": "2.0.0",
+  "name": "almanac",
+  "author": "Christian Zeller",
+  "version": "1.0.0",
   "license": "MIT",
   "keywords": [
     "pebble-app"
@@ -11,8 +11,8 @@
     "@rebble/clay": "^1.0.8"
   },
   "pebble": {
-    "displayName": "Percival",
-    "uuid": "e18ac84c-91e9-4b27-bf5b-ff5b85e6e85a",
+    "displayName": "Almanac",
+    "uuid": "8841834c-a447-43e2-b564-1f566e017987",
     "sdkVersion": "3",
     "enableMultiJS": true,
     "targetPlatforms": [

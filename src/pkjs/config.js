@@ -1,7 +1,7 @@
 module.exports = [
   {
     "type": "heading",
-    "defaultValue": "Percival Settings"
+    "defaultValue": "Almanac Settings"
   },
   {
     "type": "section",

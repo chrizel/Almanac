@@ -6,9 +6,10 @@ plus an optional top-left instrument (steps, heart rate, or battery).
 
 Almanac is a fork of [Percival](https://github.com/barefootford/Percival) by Andrew Ford,
 redesigned around the time / next-event / weather blocks. It carries its own UUID
-(`8841834c-a447-43e2-b564-1f566e017987`) and is not yet published in the Pebble store.
-Percival's own store listing is https://apps.repebble.com/2799cd581c2a4bbbade7f3da — do not
-reuse its UUID.
+(`8841834c-a447-43e2-b564-1f566e017987`) and is published in the Pebble store. Each store
+release needs a higher `version` in package.json than the last (the watch binary only keeps
+major.minor, so bump the minor). Percival's own store listing is
+https://apps.repebble.com/2799cd581c2a4bbbade7f3da — do not reuse its UUID.
 
 ## Build
 

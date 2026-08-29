@@ -22,7 +22,9 @@ coming up** and **what the sky is doing**. Three blocks stacked on a plain field
   countdown, title, and location, marked by a colored accent bar. Empty space when you're free.
 - **Weather** — a condition icon, the current temperature, and today's high and low.
 - **Optional instrument** — step count, heart rate, or battery in the top-left corner. Off by
-  default.
+  default. Step counts of 10,000 and up are shortened ("12k").
+- **Status icons** — a red Bluetooth rune appears top center when the phone connection is
+  lost, and a moon while Quiet Time is active. Invisible otherwise.
 
 ## Setup
 

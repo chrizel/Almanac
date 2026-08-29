@@ -88,13 +88,15 @@ static Layer *s_date_layer;
 static Layer *s_time_layer;
 static Layer *s_event_layer;
 static Layer *s_weather_layer;
-static Layer *s_bt_layer;
-static Layer *s_qt_layer;
+static Layer *s_status_layer;
 static Layer *s_topleft_layer;
-static bool s_bt_app_connected;
-static bool s_bt_radio_connected;
+static bool s_bt_connected;
 
-static GFont s_font_14;
+// Rendered edges of the top-row neighbors, recorded by their update procs
+// (which run first) so the status icons can dodge them.
+static int s_topleft_right;
+static int s_date_left;
+
 static GFont s_font_16;
 static GFont s_font_18;
 static GFont s_font_20;
@@ -393,6 +395,7 @@ static void date_update_proc(Layer *layer, GContext *ctx) {
       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
   int day_x = b.size.w - 10 - day_size.w;
   int dow_x = day_x - 5 - dow_size.w;
+  s_date_left = dow_x;
 
   graphics_context_set_text_color(ctx, s_settings.primary_color);
   graphics_draw_text(ctx, s_dow_buffer, s_font_20, GRect(dow_x, 0, dow_size.w + 2, 24),
@@ -407,7 +410,10 @@ static void date_update_proc(Layer *layer, GContext *ctx) {
 static void topleft_update_proc(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   int mode = s_settings.top_left;
-  if (mode <= TL_NONE || mode >= TL_COUNT) return;
+  if (mode <= TL_NONE || mode >= TL_COUNT) {
+    s_topleft_right = 0;
+    return;
+  }
 
   char text[12];
   if (mode == TL_STEPS) {
@@ -418,7 +424,11 @@ static void topleft_update_proc(Layer *layer, GContext *ctx) {
 #else
     int steps = 0;
 #endif
-    snprintf(text, sizeof(text), "%d", steps);
+    if (steps >= 10000) {
+      snprintf(text, sizeof(text), "%dk", steps / 1000);
+    } else {
+      snprintf(text, sizeof(text), "%d", steps);
+    }
   } else if (mode == TL_HEART) {
 #ifdef DEMO
     int bpm = DEMO_HEART;
@@ -478,6 +488,9 @@ static void topleft_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, s_settings.fg_color);
   graphics_draw_text(ctx, text, s_font_20, GRect(32, 0, b.size.w / 2, 24),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  s_topleft_right = 32 + graphics_text_layout_get_content_size(
+      text, s_font_20, GRect(0, 0, b.size.w / 2, 24),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft).w;
 }
 
 #ifdef PBL_HEALTH
@@ -492,15 +505,6 @@ static void battery_handler(BatteryChargeState state) {
   if (s_topleft_layer) {
     layer_mark_dirty(s_topleft_layer);
   }
-}
-
-// BT/QT normally sit in the top-left corner; drop them below the
-// instrument when it occupies that row.
-static void position_corner_layers() {
-  if (!s_qt_layer || !s_bt_layer) return;
-  int y = s_settings.top_left == TL_NONE ? 2 : 28;
-  layer_set_frame(s_qt_layer, GRect(9, y, 50, 16));
-  layer_set_frame(s_bt_layer, GRect(9, y + 16, 45, 16));
 }
 
 // ---- Event block ----
@@ -684,41 +688,82 @@ static void weather_update_proc(Layer *layer, GContext *ctx) {
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
-// ---- BT / QT indicators ----
+// ---- Status icons (bluetooth lost / quiet time) ----
 
-static void update_bt_visibility() {
-  if (s_bt_layer) {
-    layer_set_hidden(s_bt_layer, s_bt_app_connected && s_bt_radio_connected);
+static void mark_status_dirty() {
+  if (s_status_layer) {
+    layer_mark_dirty(s_status_layer);
   }
 }
 
-static void bt_app_callback(bool connected) {
-  s_bt_app_connected = connected;
-  update_bt_visibility();
+static void bt_connection_callback(bool connected) {
+  s_bt_connected = connected;
+  mark_status_dirty();
 }
 
-static void bt_radio_callback(bool connected) {
-  s_bt_radio_connected = connected;
-  update_bt_visibility();
+#define STATUS_RUNE_W 10
+#define STATUS_MOON_W 13
+#define STATUS_GAP 6
+
+// Bluetooth rune, stroke-drawn (no bluetooth glyph exists in system or
+// bundled fonts), 10x16 with x at the left edge.
+static void draw_bt_rune(GContext *ctx, int x, int y) {
+  graphics_context_set_stroke_color(ctx, GColorRed);
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_draw_line(ctx, GPoint(x + 5, y), GPoint(x + 5, y + 15));
+  graphics_draw_line(ctx, GPoint(x + 5, y), GPoint(x + 9, y + 4));
+  graphics_draw_line(ctx, GPoint(x + 9, y + 4), GPoint(x + 1, y + 11));
+  graphics_draw_line(ctx, GPoint(x + 5, y + 15), GPoint(x + 9, y + 11));
+  graphics_draw_line(ctx, GPoint(x + 9, y + 11), GPoint(x + 1, y + 4));
 }
 
-static void bt_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  graphics_context_set_text_color(ctx, GColorRed);
-  graphics_draw_text(ctx, "BT", s_font_14, bounds,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+// Crescent moon: foreground disc with a background disc punched out.
+static void draw_qt_moon(GContext *ctx, int x, int y) {
+  graphics_context_set_fill_color(ctx, s_settings.fg_color);
+  graphics_fill_circle(ctx, GPoint(x + 6, y + 8), 6);
+  graphics_context_set_fill_color(ctx, s_settings.bg_color);
+  graphics_fill_circle(ctx, GPoint(x + 10, y + 4), 6);
 }
 
-static void qt_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  graphics_context_set_text_color(ctx, s_settings.fg_color);
-  graphics_draw_text(ctx, "QT", s_font_14, bounds,
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-}
+// Drawn on the top row between the instrument and the date: centered on the
+// screen, nudged sideways when a wide neighbor gets close.
+static void status_update_proc(Layer *layer, GContext *ctx) {
+  bool bt_lost = !s_bt_connected;
+  bool quiet = quiet_time_is_active();
+  if (!bt_lost && !quiet) return;
 
-static void update_quiet_time() {
-  if (s_qt_layer) {
-    layer_set_hidden(s_qt_layer, !quiet_time_is_active());
+  GRect b = layer_get_bounds(layer);
+  int left_edge = s_topleft_right > 0 ? s_topleft_right : 10;
+  int avail = s_date_left - left_edge;
+
+  // A 5-digit step count leaves too little room for both icons — the red
+  // bluetooth rune wins, quiet time reappears once the row has space.
+  if (bt_lost && quiet &&
+      STATUS_RUNE_W + STATUS_GAP + STATUS_MOON_W + 6 > avail) {
+    quiet = false;
+  }
+
+  int w = 0;
+  if (bt_lost) w += STATUS_RUNE_W;
+  if (quiet) w += STATUS_MOON_W;
+  if (bt_lost && quiet) w += STATUS_GAP;
+
+  int x = (b.size.w - w) / 2;
+  if (avail - 6 < w) {
+    // No room for margins ("MON 30" + a 5-digit step count): center the
+    // icon in whatever gap remains rather than clipping a neighbor.
+    x = left_edge + (avail - w) / 2;
+  } else {
+    if (x + w > s_date_left - 3) x = s_date_left - 3 - w;
+    if (x < left_edge + 3) x = left_edge + 3;
+  }
+
+  if (bt_lost) {
+    draw_bt_rune(ctx, x, 4);
+    x += STATUS_RUNE_W + STATUS_GAP;
+  }
+  if (quiet) {
+    draw_qt_moon(ctx, x, 4);
   }
 }
 
@@ -804,10 +849,10 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     if (v >= 0 && v < TL_COUNT && v != s_settings.top_left) {
       s_settings.top_left = v;
       save_settings();
-      position_corner_layers();
       if (s_topleft_layer) {
         layer_mark_dirty(s_topleft_layer);
       }
+      mark_status_dirty();
     }
   }
 
@@ -845,7 +890,7 @@ static void outbox_sent_callback(DictionaryIterator *iterator, void *context) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   update_time(tick_time);
   update_date_label(tick_time);
-  update_quiet_time();
+  mark_status_dirty();  // quiet time may have started or ended
   if (s_event_layer) {
     layer_mark_dirty(s_event_layer);  // countdown text
   }
@@ -888,7 +933,6 @@ static void main_window_load(Window *window) {
   s_window_layer = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(s_window_layer);
 
-  s_font_14 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_14));
   s_font_16 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_16));
   s_font_18 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_SEMIBOLD_18));
   s_font_20 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_INTER_EXTRABOLD_20));
@@ -918,29 +962,23 @@ static void main_window_load(Window *window) {
   s_weather_layer = layer_create(GRect(0, bounds.size.h - 64, bounds.size.w, 76));
   layer_set_update_proc(s_weather_layer, weather_update_proc);
 
-  // BT / QT corner overlays in the (empty) top-left corner
-  s_qt_layer = layer_create(GRect(9, 2, 50, 16));
-  layer_set_update_proc(s_qt_layer, qt_update_proc);
-  layer_set_hidden(s_qt_layer, true);
-
-  s_bt_layer = layer_create(GRect(9, 18, 45, 16));
-  layer_set_update_proc(s_bt_layer, bt_update_proc);
-  layer_set_hidden(s_bt_layer, true);
+  // Status icons: top row between the instrument and the date. Added last so
+  // its update proc runs after theirs and sees their rendered edges.
+  s_status_layer = layer_create(GRect(0, 2, bounds.size.w, 26));
+  layer_set_update_proc(s_status_layer, status_update_proc);
 
   layer_add_child(s_window_layer, s_date_layer);
   layer_add_child(s_window_layer, s_topleft_layer);
   layer_add_child(s_window_layer, s_time_layer);
   layer_add_child(s_window_layer, s_event_layer);
   layer_add_child(s_window_layer, s_weather_layer);
-  layer_add_child(s_window_layer, s_bt_layer);
-  layer_add_child(s_window_layer, s_qt_layer);
+  layer_add_child(s_window_layer, s_status_layer);
 
   UnobstructedAreaHandlers ua_handlers = {
     .change = unobstructed_change,
     .did_change = unobstructed_did_change
   };
   unobstructed_area_service_subscribe(ua_handlers, NULL);
-  position_corner_layers();
   update_layout();
 }
 
@@ -951,11 +989,9 @@ static void main_window_unload(Window *window) {
   layer_destroy(s_time_layer);
   layer_destroy(s_event_layer);
   layer_destroy(s_weather_layer);
-  layer_destroy(s_bt_layer);
-  layer_destroy(s_qt_layer);
+  layer_destroy(s_status_layer);
   gpath_destroy(s_bolt_path);
   gpath_destroy(s_heart_path);
-  fonts_unload_custom_font(s_font_14);
   fonts_unload_custom_font(s_font_16);
   fonts_unload_custom_font(s_font_18);
   fonts_unload_custom_font(s_font_20);
@@ -986,13 +1022,10 @@ static void init() {
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
 
   connection_service_subscribe((ConnectionHandlers) {
-    .pebble_app_connection_handler = bt_app_callback
+    .pebble_app_connection_handler = bt_connection_callback
   });
-  s_bt_app_connected = connection_service_peek_pebble_app_connection();
-  bluetooth_connection_service_subscribe(bt_radio_callback);
-  s_bt_radio_connected = bluetooth_connection_service_peek();
-  update_bt_visibility();
-  update_quiet_time();
+  s_bt_connected = connection_service_peek_pebble_app_connection();
+  mark_status_dirty();
 
   battery_state_service_subscribe(battery_handler);
 #ifdef PBL_HEALTH

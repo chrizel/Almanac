@@ -67,12 +67,6 @@
         },
         {
           "type": "font",
-          "name": "FONT_INTER_SEMIBOLD_14",
-          "file": "fonts/Inter-SemiBold.ttf",
-          "characterRegex": "[ -~·]"
-        },
-        {
-          "type": "font",
           "name": "FONT_INTER_SEMIBOLD_16",
           "file": "fonts/Inter-SemiBold.ttf",
           "characterRegex": "[ -~·À-ÿ]"

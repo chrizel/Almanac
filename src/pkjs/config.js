@@ -47,6 +47,13 @@ module.exports = [
         ]
       },
       {
+        "type": "toggle",
+        "messageKey": "SwapBlocks",
+        "label": "Weather Above Event",
+        "description": "Show the weather block directly under the time and the next event below it.",
+        "defaultValue": false
+      },
+      {
         "type": "select",
         "messageKey": "Language",
         "label": "Language",

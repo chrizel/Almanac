@@ -2,7 +2,8 @@ var WEATHER_POLL_MINUTES = 30;
 
 var Clay = require('@rebble/clay');
 var clayConfig = require('./config');
-var clay = new Clay(clayConfig);
+var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
+var messageKeys = require('message_keys');
 var ics = require('./ics');
 
 var xhrRequest = function (url, type, callback) {
@@ -197,10 +198,19 @@ Pebble.addEventListener('appmessage', function (e) {
   refreshAll();
 });
 
-// Clay's own webviewclosed handler runs first and persists the new
-// settings, so this fetch picks up changed unit / ICS URL immediately.
+Pebble.addEventListener('showConfiguration', function () {
+  Pebble.openURL(clay.generateUrl());
+});
+
+// Clay is not auto-handling events so we can strip the JS-only settings
+// from the AppMessage: a long ICS URL overflows the watch's 256-byte inbox
+// and the whole settings message gets dropped.
 Pebble.addEventListener('webviewclosed', function (e) {
-  if (e && e.response) {
-    refreshAll();
-  }
+  if (!e || !e.response) return;
+  // getSettings() persists to localStorage and returns the message keyed by number
+  var settings = clay.getSettings(e.response);
+  delete settings[messageKeys.IcsUrl];
+  delete settings[messageKeys.TempUnit];
+  enqueueSend(settings, 'settings');
+  refreshAll();
 });

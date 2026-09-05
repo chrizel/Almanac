@@ -23,6 +23,7 @@
 #define DEMO_EVENT_TITLE "Design Review"
 #define DEMO_EVENT_LOCATION "Office HQ, Room B2"
 #define DEMO_TOPLEFT 0            // 0 none · 1 steps · 2 heart rate · 3 battery
+#define DEMO_SWAP 0               // 1 = weather above event
 #define DEMO_STEPS 8412
 #define DEMO_HEART 72
 #define DEMO_BATTERY 80
@@ -43,6 +44,7 @@ extern uint32_t MESSAGE_KEY_Language;
 extern uint32_t MESSAGE_KEY_TopLeft;
 extern uint32_t MESSAGE_KEY_BackgroundColor;
 extern uint32_t MESSAGE_KEY_ForegroundColor;
+extern uint32_t MESSAGE_KEY_SwapBlocks;
 
 // Shared with conditionFromWmo() in src/pkjs/index.js
 enum Condition {
@@ -135,6 +137,7 @@ typedef struct {
   uint8_t top_left;  // enum TopLeft
   GColor bg_color;
   GColor fg_color;
+  uint8_t swap_blocks;  // 1 = weather above event
 } Settings;
 
 static Settings s_settings;
@@ -155,6 +158,7 @@ static void load_settings() {
 #ifdef DEMO
   s_settings.primary_color = DEMO_ACCENT;
   s_settings.top_left = DEMO_TOPLEFT;
+  s_settings.swap_blocks = DEMO_SWAP;
 #else
   if (persist_exists(SETTINGS_KEY)) {
     int stored = persist_get_size(SETTINGS_KEY);
@@ -767,6 +771,8 @@ static void status_update_proc(Layer *layer, GContext *ctx) {
   }
 }
 
+static void update_layout();
+
 // ---- Messaging ----
 
 static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
@@ -856,6 +862,16 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     }
   }
 
+  Tuple *swap_t = dict_find(iterator, MESSAGE_KEY_SwapBlocks);
+  if (swap_t) {
+    uint8_t v = swap_t->value->int32 ? 1 : 0;
+    if (v != s_settings.swap_blocks) {
+      s_settings.swap_blocks = v;
+      save_settings();
+      update_layout();
+    }
+  }
+
   Tuple *lang_t = dict_find(iterator, MESSAGE_KEY_Language);
   if (lang_t) {
     // Clay may deliver select values as int or as a digit string
@@ -874,7 +890,7 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 }
 
 static void inbox_dropped_callback(AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped!");
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", (int)reason);
 }
 
 static void outbox_failed_callback(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
@@ -914,11 +930,20 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 
 // ---- Layout ----
 
+// Event block sits centered between the time and the weather block; the
+// weather block's ink is bottom-aligned to match the 8px top padding.
+// swap_blocks trades their rows.
 static void update_layout() {
   GRect full = layer_get_bounds(s_window_layer);
   GRect unob = layer_get_unobstructed_bounds(s_window_layer);
-  // Timeline Quick View: hide the weather block while obstructed
-  layer_set_hidden(s_weather_layer, unob.size.h < full.size.h);
+  int w = full.size.w, h = full.size.h;
+  bool swap = s_settings.swap_blocks;
+  layer_set_frame(s_event_layer, swap ? GRect(0, h - 66, w, 60) : GRect(0, 107, w, 60));
+  layer_set_frame(s_weather_layer, swap ? GRect(0, 90, w, 76) : GRect(0, h - 64, w, 76));
+  // Timeline Quick View: hide whichever block sits at the bottom while obstructed
+  bool obstructed = unob.size.h < full.size.h;
+  layer_set_hidden(s_weather_layer, obstructed && !swap);
+  layer_set_hidden(s_event_layer, obstructed && swap);
 }
 
 static void unobstructed_change(AnimationProgress progress, void *context) {
@@ -954,12 +979,10 @@ static void main_window_load(Window *window) {
   s_time_layer = layer_create(GRect(0, 21, bounds.size.w, 76));
   layer_set_update_proc(s_time_layer, time_update_proc);
 
-  // Event block: centered between the time and the weather block
-  s_event_layer = layer_create(GRect(0, 107, bounds.size.w, 60));
+  // Event and weather blocks: frames assigned by update_layout()
+  s_event_layer = layer_create(GRectZero);
   layer_set_update_proc(s_event_layer, event_update_proc);
-
-  // Weather block: bottom third, ink bottom-aligned to match the 8px top padding
-  s_weather_layer = layer_create(GRect(0, bounds.size.h - 64, bounds.size.w, 76));
+  s_weather_layer = layer_create(GRectZero);
   layer_set_update_proc(s_weather_layer, weather_update_proc);
 
   // Status icons: top row between the instrument and the date. Added last so

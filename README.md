@@ -36,8 +36,8 @@ Configure in the Pebble app settings:
 - **Top left display** — nothing, steps, heart rate, or battery.
 - **Weather above event** — swap the two lower blocks so the weather sits under the time and
   the next event moves to the bottom.
-- **Language** — English, German, French, Spanish, Italian, Portuguese, or Dutch. Sets the
-  weekday abbreviation and the countdown wording.
+- **Language** — English, German, French, Spanish, Italian, Portuguese, Dutch, or Hungarian.
+  Sets the weekday abbreviation and the countdown wording.
 - **ICS feed URL** — paste your calendar's private ICS address to enable the event block
   (Google Calendar: Settings → your calendar → *Secret address in iCal format*). Supports
   daily and weekly recurring events. Leave empty to keep the center clear.

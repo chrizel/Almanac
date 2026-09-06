@@ -537,23 +537,24 @@ static void event_update_proc(Layer *layer, GContext *ctx) {
     if (d < -5) return;  // passed; hidden until the next JS refresh replaces it
     if (d <= 0) {
       snprintf(when, sizeof(when), "%s \xC2\xB7 %s", timebuf, STR_NOW[l]);
-    } else if (l == LANG_HU) {
-      // Hungarian puts "in" after the duration.
-      if (d < 60) {
-        snprintf(when, sizeof(when), "%s \xC2\xB7 %d P %s", timebuf, d, STR_IN[l]);
-      } else if (d % 60 == 0) {
-        snprintf(when, sizeof(when), "%s \xC2\xB7 %d %s %s", timebuf, d / 60, STR_HOUR[l], STR_IN[l]);
-      } else {
-        snprintf(when, sizeof(when), "%s \xC2\xB7 %d %s %d P %s",
-                 timebuf, d / 60, STR_HOUR[l], d % 60, STR_IN[l]);
-      }
-    } else if (d < 60) {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d MIN", timebuf, STR_IN[l], d);
-    } else if (d % 60 == 0) {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d %s", timebuf, STR_IN[l], d / 60, STR_HOUR[l]);
     } else {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d %s %d MIN",
-               timebuf, STR_IN[l], d / 60, STR_HOUR[l], d % 60);
+      char duration[24];
+      const char *minute = l == LANG_HU ? "P" : "MIN";
+
+      if (d < 60) {
+        snprintf(duration, sizeof(duration), "%d %s", d, minute);
+      } else if (d % 60 == 0) {
+        snprintf(duration, sizeof(duration), "%d %s", d / 60, STR_HOUR[l]);
+      } else {
+        snprintf(duration, sizeof(duration), "%d %s %d %s",
+                 d / 60, STR_HOUR[l], d % 60, minute);
+      }
+
+      if (l == LANG_HU) {
+        snprintf(when, sizeof(when), "%s \xC2\xB7 %s %s", timebuf, duration, STR_IN[l]);
+      } else {
+        snprintf(when, sizeof(when), "%s \xC2\xB7 %s %s", timebuf, STR_IN[l], duration);
+      }
     }
   } else {
     snprintf(when, sizeof(when), "%s \xC2\xB7 %s", STR_TOMORROW[l], timebuf);

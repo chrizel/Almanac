@@ -75,6 +75,7 @@ enum Lang {
   LANG_IT = 4,
   LANG_PT = 5,
   LANG_NL = 6,
+  LANG_HU = 7,
   LANG_COUNT
 };
 
@@ -255,24 +256,25 @@ static const char *DAYS[LANG_COUNT][7] = {
   {"DOM", "LUN", "MAR", "MI\xC3\x89", "JUE", "VIE", "S\xC3\x81" "B"},         // ES
   {"DOM", "LUN", "MAR", "MER", "GIO", "VEN", "SAB"},                          // IT
   {"DOM", "SEG", "TER", "QUA", "QUI", "SEX", "S\xC3\x81" "B"},                // PT
-  {"ZO", "MA", "DI", "WO", "DO", "VR", "ZA"}                                  // NL
+  {"ZO", "MA", "DI", "WO", "DO", "VR", "ZA"},                                 // NL
+  {"VA", "H\xC3\x89", "KE", "SZE", "CS", "P\xC3\x89", "SZO"}                  // HU
 };
 
 static const char *STR_NOW[LANG_COUNT] = {
-  "NOW", "JETZT", "MAINTENANT", "AHORA", "ORA", "AGORA", "NU"
+  "NOW", "JETZT", "MAINTENANT", "AHORA", "ORA", "AGORA", "NU", "MOST"
 };
 
 static const char *STR_IN[LANG_COUNT] = {
-  "IN", "IN", "DANS", "EN", "TRA", "EM", "OVER"
+  "IN", "IN", "DANS", "EN", "TRA", "EM", "OVER", "M\xC3\x9ALVA"
 };
 
 static const char *STR_TOMORROW[LANG_COUNT] = {
   "TOMORROW", "MORGEN", "DEMAIN", "MA\xC3\x91" "ANA", "DOMANI",
-  "AMANH\xC3\x83", "MORGEN"
+  "AMANH\xC3\x83", "MORGEN", "HOLNAP"
 };
 
 static const char *STR_HOUR[LANG_COUNT] = {
-  "H", "STD", "H", "H", "H", "H", "U"
+  "H", "STD", "H", "H", "H", "H", "U", "\xC3\x93"
 };
 
 static struct tm *get_time(struct tm *t) {
@@ -535,13 +537,24 @@ static void event_update_proc(Layer *layer, GContext *ctx) {
     if (d < -5) return;  // passed; hidden until the next JS refresh replaces it
     if (d <= 0) {
       snprintf(when, sizeof(when), "%s \xC2\xB7 %s", timebuf, STR_NOW[l]);
-    } else if (d < 60) {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d MIN", timebuf, STR_IN[l], d);
-    } else if (d % 60 == 0) {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d %s", timebuf, STR_IN[l], d / 60, STR_HOUR[l]);
     } else {
-      snprintf(when, sizeof(when), "%s \xC2\xB7 %s %d %s %d MIN",
-               timebuf, STR_IN[l], d / 60, STR_HOUR[l], d % 60);
+      char duration[24];
+      const char *minute = l == LANG_HU ? "P" : "MIN";
+
+      if (d < 60) {
+        snprintf(duration, sizeof(duration), "%d %s", d, minute);
+      } else if (d % 60 == 0) {
+        snprintf(duration, sizeof(duration), "%d %s", d / 60, STR_HOUR[l]);
+      } else {
+        snprintf(duration, sizeof(duration), "%d %s %d %s",
+                 d / 60, STR_HOUR[l], d % 60, minute);
+      }
+
+      if (l == LANG_HU) {
+        snprintf(when, sizeof(when), "%s \xC2\xB7 %s %s", timebuf, duration, STR_IN[l]);
+      } else {
+        snprintf(when, sizeof(when), "%s \xC2\xB7 %s %s", timebuf, STR_IN[l], duration);
+      }
     }
   } else {
     snprintf(when, sizeof(when), "%s \xC2\xB7 %s", STR_TOMORROW[l], timebuf);

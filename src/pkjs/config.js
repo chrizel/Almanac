@@ -65,7 +65,8 @@ module.exports = [
           {"label": "Español", "value": 3},
           {"label": "Italiano", "value": 4},
           {"label": "Português", "value": 5},
-          {"label": "Nederlands", "value": 6}
+          {"label": "Nederlands", "value": 6},
+          {"label": "Magyar", "value": 7}
         ]
       }
     ]
